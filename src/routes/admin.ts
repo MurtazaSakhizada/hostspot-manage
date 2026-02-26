@@ -1,0 +1,540 @@
+// ============================================
+// Admin Routes: Branches, Packages, Users
+// ============================================
+import { Hono } from 'hono';
+import { t, type Lang } from '../lib/i18n';
+import type { SessionUser } from '../lib/auth';
+import { pageShell } from '../lib/layout';
+import { formatMoney } from '../lib/calc';
+import { hashPassword } from '../lib/auth';
+
+type Bindings = { DB: D1Database };
+type Variables = { user: SessionUser; lang: Lang };
+
+const admin = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+
+// ============ BRANCHES ============
+admin.get('/branches', async (c) => {
+  const user = c.get('user');
+  const lang = c.get('lang');
+  if (user.role !== 'owner') return c.redirect('/dashboard');
+
+  const items = await c.env.DB.prepare(`
+    SELECT b.*,
+      (SELECT COUNT(*) FROM sales WHERE branch_id=b.id AND company_id=b.company_id) as sale_count
+    FROM branches b WHERE b.company_id=? ORDER BY b.created_at DESC`).bind(user.company_id).all<any>();
+
+  const rows = (items.results||[]).map((b: any) => `
+    <tr>
+      <td><strong>${b.name}</strong></td>
+      <td>${b.sale_count}</td>
+      <td><span class="badge badge-${b.active?'success':'danger'}">${t(lang, b.active?'active':'inactive')}</span></td>
+      <td>
+        <button onclick="editBranch(${b.id},'${b.name.replace(/'/g,"\\'")}',${b.active})" class="btn btn-outline btn-sm">${t(lang,'edit')}</button>
+        <button onclick="confirmDelete('/api/branches/${b.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>
+      </td>
+    </tr>`).join('');
+
+  return c.html(pageShell({
+    title: t(lang,'branches'), lang, user, activePage: 'branches',
+    body: `
+    <div class="page-header">
+      <div class="page-title">🏢 ${t(lang,'branches')}</div>
+      <button onclick="document.getElementById('add-modal').classList.add('open')" class="btn btn-primary">+ ${t(lang,'add_branch')}</button>
+    </div>
+    <div class="card">
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>${t(lang,'name')}</th>
+            <th>Sales</th>
+            <th>${t(lang,'status')}</th>
+            <th>${t(lang,'actions')}</th>
+          </tr></thead>
+          <tbody>${rows||`<tr><td colspan="4"><div class="empty-state"><div class="empty-state-icon">🏢</div><h3>${t(lang,'no_data')}</h3></div></td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Add Modal -->
+    <div class="modal-overlay" id="add-modal">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">+ ${t(lang,'add_branch')}</div>
+          <button class="modal-close" onclick="document.getElementById('add-modal').classList.remove('open')">✕</button>
+        </div>
+        <form method="POST" action="/branches">
+          <div class="form-group">
+            <label>${t(lang,'name')}</label>
+            <input type="text" name="name" required autofocus/>
+          </div>
+          <div class="modal-footer">
+            <button type="button" onclick="document.getElementById('add-modal').classList.remove('open')" class="btn btn-outline">${t(lang,'cancel')}</button>
+            <button type="submit" class="btn btn-primary">${t(lang,'save')}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Edit Modal -->
+    <div class="modal-overlay" id="edit-modal">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">${t(lang,'edit')} ${t(lang,'branch')}</div>
+          <button class="modal-close" onclick="document.getElementById('edit-modal').classList.remove('open')">✕</button>
+        </div>
+        <form id="edit-form" method="POST">
+          <input type="hidden" name="_method" value="PUT"/>
+          <div class="form-group">
+            <label>${t(lang,'name')}</label>
+            <input type="text" name="name" id="edit-name" required/>
+          </div>
+          <div class="form-group">
+            <label>${t(lang,'status')}</label>
+            <select name="active" id="edit-active">
+              <option value="1">${t(lang,'active')}</option>
+              <option value="0">${t(lang,'inactive')}</option>
+            </select>
+          </div>
+          <div class="modal-footer">
+            <button type="button" onclick="document.getElementById('edit-modal').classList.remove('open')" class="btn btn-outline">${t(lang,'cancel')}</button>
+            <button type="submit" class="btn btn-primary">${t(lang,'save')}</button>
+          </div>
+        </form>
+      </div>
+    </div>`,
+    scripts: `<script>
+    function editBranch(id, name, active) {
+      document.getElementById('edit-name').value = name;
+      document.getElementById('edit-active').value = active ? '1' : '0';
+      document.getElementById('edit-form').action = '/branches/'+id;
+      document.getElementById('edit-modal').classList.add('open');
+    }
+    </script>`
+  }));
+});
+
+admin.post('/branches', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const form = await c.req.formData();
+  const name = form.get('name')?.toString().trim() ?? '';
+  if (!name) return c.redirect('/branches');
+  await c.env.DB.prepare('INSERT INTO branches (company_id, name) VALUES (?, ?)').bind(user.company_id, name).run();
+  return new Response(null, { status: 302, headers: { 'Location': '/branches' } });
+});
+
+admin.post('/branches/:id', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const id = c.req.param('id');
+  const form = await c.req.formData();
+  const name = form.get('name')?.toString().trim() ?? '';
+  const active = form.get('active')?.toString() === '1' ? 1 : 0;
+  await c.env.DB.prepare('UPDATE branches SET name=?, active=? WHERE id=? AND company_id=?').bind(name, active, id, user.company_id).run();
+  return new Response(null, { status: 302, headers: { 'Location': '/branches' } });
+});
+
+admin.delete('/api/branches/:id', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM branches WHERE id=? AND company_id=?').bind(id, user.company_id).run();
+  return c.json({success:true});
+});
+
+// ============ PACKAGES ============
+admin.get('/packages', async (c) => {
+  const user = c.get('user');
+  const lang = c.get('lang');
+  if (user.role !== 'owner') return c.redirect('/dashboard');
+
+  const items = await c.env.DB.prepare('SELECT * FROM packages WHERE company_id=? ORDER BY size_gb ASC').bind(user.company_id).all<any>();
+
+  const rows = (items.results||[]).map((p: any) => `
+    <tr>
+      <td><strong>${p.name}</strong></td>
+      <td class="text-primary font-bold">${p.size_gb} GB</td>
+      <td>${formatMoney(p.sale_price_per_gb)}/GB</td>
+      <td class="text-success font-bold">${formatMoney(p.size_gb * p.sale_price_per_gb)}</td>
+      <td><span class="badge badge-${p.active?'success':'danger'}">${t(lang, p.active?'active':'inactive')}</span></td>
+      <td>
+        <button onclick="editPkg(${p.id},'${p.name.replace(/'/g,"\\'")}',${p.size_gb},${p.sale_price_per_gb},${p.active})" class="btn btn-outline btn-sm">${t(lang,'edit')}</button>
+        <button onclick="confirmDelete('/api/packages/${p.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>
+      </td>
+    </tr>`).join('');
+
+  return c.html(pageShell({
+    title: t(lang,'packages'), lang, user, activePage: 'packages',
+    body: `
+    <div class="page-header">
+      <div class="page-title">🗂️ ${t(lang,'packages')}</div>
+      <button onclick="document.getElementById('add-modal').classList.add('open')" class="btn btn-primary">+ ${t(lang,'add_package')}</button>
+    </div>
+    <div class="card">
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>${t(lang,'name')}</th>
+            <th>${t(lang,'size_gb')}</th>
+            <th>${t(lang,'price_per_gb')}</th>
+            <th>Total Price</th>
+            <th>${t(lang,'status')}</th>
+            <th>${t(lang,'actions')}</th>
+          </tr></thead>
+          <tbody>${rows||`<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">🗂️</div><h3>${t(lang,'no_data')}</h3></div></td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Add Modal -->
+    <div class="modal-overlay" id="add-modal">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">+ ${t(lang,'add_package')}</div>
+          <button class="modal-close" onclick="document.getElementById('add-modal').classList.remove('open')">✕</button>
+        </div>
+        <form method="POST" action="/packages">
+          <div class="form-group">
+            <label>${t(lang,'name')}</label>
+            <input type="text" name="name" required placeholder="5GB Package"/>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>${t(lang,'size_gb')}</label>
+              <input type="number" name="size_gb" min="0.1" step="0.1" required/>
+            </div>
+            <div class="form-group">
+              <label>${t(lang,'price_per_gb')} (؋)</label>
+              <input type="number" name="sale_price_per_gb" min="0.01" step="0.01" required/>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" onclick="document.getElementById('add-modal').classList.remove('open')" class="btn btn-outline">${t(lang,'cancel')}</button>
+            <button type="submit" class="btn btn-primary">${t(lang,'save')}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Edit Modal -->
+    <div class="modal-overlay" id="edit-modal">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">${t(lang,'edit')} ${t(lang,'package')}</div>
+          <button class="modal-close" onclick="document.getElementById('edit-modal').classList.remove('open')">✕</button>
+        </div>
+        <form id="edit-form" method="POST">
+          <div class="form-group">
+            <label>${t(lang,'name')}</label>
+            <input type="text" name="name" id="edit-name" required/>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>${t(lang,'size_gb')}</label>
+              <input type="number" name="size_gb" id="edit-gb" min="0.1" step="0.1" required/>
+            </div>
+            <div class="form-group">
+              <label>${t(lang,'price_per_gb')}</label>
+              <input type="number" name="sale_price_per_gb" id="edit-price" min="0.01" step="0.01" required/>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>${t(lang,'status')}</label>
+            <select name="active" id="edit-active">
+              <option value="1">${t(lang,'active')}</option>
+              <option value="0">${t(lang,'inactive')}</option>
+            </select>
+          </div>
+          <div class="modal-footer">
+            <button type="button" onclick="document.getElementById('edit-modal').classList.remove('open')" class="btn btn-outline">${t(lang,'cancel')}</button>
+            <button type="submit" class="btn btn-primary">${t(lang,'save')}</button>
+          </div>
+        </form>
+      </div>
+    </div>`,
+    scripts: `<script>
+    function editPkg(id, name, gb, price, active) {
+      document.getElementById('edit-name').value = name;
+      document.getElementById('edit-gb').value = gb;
+      document.getElementById('edit-price').value = price;
+      document.getElementById('edit-active').value = active ? '1' : '0';
+      document.getElementById('edit-form').action = '/packages/'+id;
+      document.getElementById('edit-modal').classList.add('open');
+    }
+    </script>`
+  }));
+});
+
+admin.post('/packages', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const form = await c.req.formData();
+  const name = form.get('name')?.toString().trim() ?? '';
+  const size_gb = parseFloat(form.get('size_gb')?.toString() ?? '0');
+  const price = parseFloat(form.get('sale_price_per_gb')?.toString() ?? '0');
+  await c.env.DB.prepare('INSERT INTO packages (company_id, name, size_gb, sale_price_per_gb) VALUES (?,?,?,?)').bind(user.company_id, name, size_gb, price).run();
+  return new Response(null, { status: 302, headers: { 'Location': '/packages' } });
+});
+
+admin.post('/packages/:id', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const id = c.req.param('id');
+  const form = await c.req.formData();
+  const name = form.get('name')?.toString().trim() ?? '';
+  const size_gb = parseFloat(form.get('size_gb')?.toString() ?? '0');
+  const price = parseFloat(form.get('sale_price_per_gb')?.toString() ?? '0');
+  const active = form.get('active')?.toString() === '1' ? 1 : 0;
+  await c.env.DB.prepare('UPDATE packages SET name=?,size_gb=?,sale_price_per_gb=?,active=? WHERE id=? AND company_id=?').bind(name, size_gb, price, active, id, user.company_id).run();
+  return new Response(null, { status: 302, headers: { 'Location': '/packages' } });
+});
+
+admin.delete('/api/packages/:id', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM packages WHERE id=? AND company_id=?').bind(id, user.company_id).run();
+  return c.json({success:true});
+});
+
+// ============ USERS ============
+admin.get('/users', async (c) => {
+  const user = c.get('user');
+  const lang = c.get('lang');
+  if (user.role !== 'owner') return c.redirect('/dashboard');
+
+  const items = await c.env.DB.prepare(`
+    SELECT u.*,
+      (SELECT COUNT(*) FROM sales WHERE seller_id=u.id AND company_id=u.company_id) as sale_count
+    FROM users u WHERE u.company_id=? ORDER BY u.created_at DESC`).bind(user.company_id).all<any>();
+
+  const rows = (items.results||[]).map((u: any) => `
+    <tr>
+      <td><strong>${u.full_name}</strong></td>
+      <td><code>${u.username}</code></td>
+      <td><span class="badge badge-${u.role}">${t(lang, u.role==='owner'?'owner':'seller_role')}</span></td>
+      <td>${u.role==='seller' ? `<span class="badge badge-warning">${Math.round(u.commission_rate*100)}%</span>` : '—'}</td>
+      <td>${u.sale_count}</td>
+      <td><span class="badge badge-${u.active?'success':'danger'}">${t(lang,u.active?'active':'inactive')}</span></td>
+      <td>
+        ${u.id !== user.id ? `
+        <button onclick="editUser(${u.id},'${u.full_name.replace(/'/g,"\\'")}','${u.username}','${u.role}',${u.commission_rate},'${u.language}',${u.active})" class="btn btn-outline btn-sm">${t(lang,'edit')}</button>
+        <button onclick="confirmDelete('/api/users/${u.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>` : '<span class="text-gray text-xs">Current user</span>'}
+      </td>
+    </tr>`).join('');
+
+  return c.html(pageShell({
+    title: t(lang,'users'), lang, user, activePage: 'users',
+    body: `
+    <div class="page-header">
+      <div class="page-title">👥 ${t(lang,'users')}</div>
+      <button onclick="document.getElementById('add-modal').classList.add('open')" class="btn btn-primary">+ ${t(lang,'add_user')}</button>
+    </div>
+    <div class="card">
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>${t(lang,'full_name')}</th>
+            <th>${t(lang,'username')}</th>
+            <th>${t(lang,'role')}</th>
+            <th>${t(lang,'commission_rate')}</th>
+            <th>Sales</th>
+            <th>${t(lang,'status')}</th>
+            <th>${t(lang,'actions')}</th>
+          </tr></thead>
+          <tbody>${rows||`<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">👥</div><h3>${t(lang,'no_data')}</h3></div></td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Add User Modal -->
+    <div class="modal-overlay" id="add-modal">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">+ ${t(lang,'add_user')}</div>
+          <button class="modal-close" onclick="document.getElementById('add-modal').classList.remove('open')">✕</button>
+        </div>
+        <form method="POST" action="/users">
+          <div class="form-row">
+            <div class="form-group">
+              <label>${t(lang,'full_name')}</label>
+              <input type="text" name="full_name" required/>
+            </div>
+            <div class="form-group">
+              <label>${t(lang,'username')}</label>
+              <input type="text" name="username" required/>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>${t(lang,'password')}</label>
+              <input type="password" name="password" required minlength="4"/>
+            </div>
+            <div class="form-group">
+              <label>${t(lang,'role')}</label>
+              <select name="role" id="add-role" onchange="toggleCommission('add')">
+                <option value="seller">${t(lang,'seller_role')}</option>
+                <option value="owner">${t(lang,'owner')}</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group" id="add-comm-wrap">
+            <label>${t(lang,'commission_rate')} (0–100%)</label>
+            <input type="number" name="commission_rate" min="0" max="100" step="0.5" value="15" placeholder="15"/>
+            <div class="form-hint">Enter as percentage, e.g. 15 = 15%</div>
+          </div>
+          <div class="form-group">
+            <label>${t(lang,'language')}</label>
+            <select name="language">
+              <option value="en">English</option>
+              <option value="fa">دری</option>
+              <option value="ps">پښتو</option>
+            </select>
+          </div>
+          <div class="modal-footer">
+            <button type="button" onclick="document.getElementById('add-modal').classList.remove('open')" class="btn btn-outline">${t(lang,'cancel')}</button>
+            <button type="submit" class="btn btn-primary">${t(lang,'save')}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Edit User Modal -->
+    <div class="modal-overlay" id="edit-modal">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">${t(lang,'edit')} ${t(lang,'users')}</div>
+          <button class="modal-close" onclick="document.getElementById('edit-modal').classList.remove('open')">✕</button>
+        </div>
+        <form id="edit-form" method="POST">
+          <div class="form-row">
+            <div class="form-group">
+              <label>${t(lang,'full_name')}</label>
+              <input type="text" name="full_name" id="edit-name" required/>
+            </div>
+            <div class="form-group">
+              <label>${t(lang,'username')}</label>
+              <input type="text" name="username" id="edit-uname" required/>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>New ${t(lang,'password')} (leave blank to keep)</label>
+            <input type="password" name="password" minlength="4"/>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>${t(lang,'role')}</label>
+              <select name="role" id="edit-role" onchange="toggleCommission('edit')">
+                <option value="seller">${t(lang,'seller_role')}</option>
+                <option value="owner">${t(lang,'owner')}</option>
+              </select>
+            </div>
+            <div class="form-group" id="edit-comm-wrap">
+              <label>${t(lang,'commission_rate')} (%)</label>
+              <input type="number" name="commission_rate" id="edit-comm" min="0" max="100" step="0.5"/>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>${t(lang,'language')}</label>
+              <select name="language" id="edit-lang">
+                <option value="en">English</option>
+                <option value="fa">دری</option>
+                <option value="ps">پښتو</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>${t(lang,'status')}</label>
+              <select name="active" id="edit-active">
+                <option value="1">${t(lang,'active')}</option>
+                <option value="0">${t(lang,'inactive')}</option>
+              </select>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" onclick="document.getElementById('edit-modal').classList.remove('open')" class="btn btn-outline">${t(lang,'cancel')}</button>
+            <button type="submit" class="btn btn-primary">${t(lang,'save')}</button>
+          </div>
+        </form>
+      </div>
+    </div>`,
+    scripts: `<script>
+    function toggleCommission(prefix) {
+      const role = document.getElementById(prefix+'-role').value;
+      const wrap = document.getElementById(prefix+'-comm-wrap');
+      if (wrap) wrap.style.display = role === 'seller' ? 'block' : 'none';
+    }
+    function editUser(id, name, uname, role, rate, lang, active) {
+      document.getElementById('edit-name').value = name;
+      document.getElementById('edit-uname').value = uname;
+      document.getElementById('edit-role').value = role;
+      document.getElementById('edit-comm').value = Math.round(rate * 100);
+      document.getElementById('edit-lang').value = lang;
+      document.getElementById('edit-active').value = active ? '1' : '0';
+      document.getElementById('edit-form').action = '/users/'+id;
+      toggleCommission('edit');
+      document.getElementById('edit-modal').classList.add('open');
+    }
+    toggleCommission('add');
+    </script>`
+  }));
+});
+
+admin.post('/users', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const form = await c.req.formData();
+  const full_name = form.get('full_name')?.toString().trim() ?? '';
+  const username = form.get('username')?.toString().trim() ?? '';
+  const password = form.get('password')?.toString() ?? '';
+  const role = form.get('role')?.toString() ?? 'seller';
+  const commission_rate = parseFloat(form.get('commission_rate')?.toString() ?? '0') / 100;
+  const language = form.get('language')?.toString() ?? 'en';
+
+  const hash = await hashPassword(password);
+  try {
+    await c.env.DB.prepare(`
+      INSERT INTO users (company_id, username, password_hash, full_name, role, commission_rate, language)
+      VALUES (?,?,?,?,?,?,?)`).bind(user.company_id, username, hash, full_name, role, commission_rate, language).run();
+  } catch (e: any) {
+    return c.html(`Error: ${e.message}`, 400);
+  }
+  return new Response(null, { status: 302, headers: { 'Location': '/users' } });
+});
+
+admin.post('/users/:id', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const id = c.req.param('id');
+  const form = await c.req.formData();
+  const full_name = form.get('full_name')?.toString().trim() ?? '';
+  const username = form.get('username')?.toString().trim() ?? '';
+  const password = form.get('password')?.toString() ?? '';
+  const role = form.get('role')?.toString() ?? 'seller';
+  const commission_rate = parseFloat(form.get('commission_rate')?.toString() ?? '0') / 100;
+  const language = form.get('language')?.toString() ?? 'en';
+  const active = form.get('active')?.toString() === '1' ? 1 : 0;
+
+  if (password) {
+    const hash = await hashPassword(password);
+    await c.env.DB.prepare(`
+      UPDATE users SET full_name=?,username=?,password_hash=?,role=?,commission_rate=?,language=?,active=?
+      WHERE id=? AND company_id=?`).bind(full_name, username, hash, role, commission_rate, language, active, id, user.company_id).run();
+  } else {
+    await c.env.DB.prepare(`
+      UPDATE users SET full_name=?,username=?,role=?,commission_rate=?,language=?,active=?
+      WHERE id=? AND company_id=?`).bind(full_name, username, role, commission_rate, language, active, id, user.company_id).run();
+  }
+  return new Response(null, { status: 302, headers: { 'Location': '/users' } });
+});
+
+admin.delete('/api/users/:id', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM users WHERE id=? AND company_id=? AND id != ?').bind(id, user.company_id, user.id).run();
+  return c.json({success:true});
+});
+
+export default admin;
