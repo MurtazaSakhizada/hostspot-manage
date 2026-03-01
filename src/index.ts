@@ -17,6 +17,7 @@ import salesRoutes from './routes/sales';
 import paymentsRoutes from './routes/payments';
 import reportsRoutes from './routes/reports';
 import adminRoutes from './routes/admin';
+import superAdminRoutes from './routes/superadmin';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -33,13 +34,14 @@ app.get('/favicon.ico', (c) => {
 });
 
 // ---- Auth Middleware ----
-const PUBLIC_PATHS = ['/login', '/logout', '/register', '/api/language'];
+const PUBLIC_PATHS = ['/login', '/logout', '/api/language'];
 
 app.use('*', async (c, next) => {
   const path = new URL(c.req.url).pathname;
   
-  // Always allow public paths and static files
+  // Always allow public paths, static files, and super admin paths
   if (path.startsWith('/static') || path.startsWith('/favicon') ||
+      path.startsWith('/sa/') || path === '/sa' ||
       PUBLIC_PATHS.some(p => path === p || path.startsWith(p))) {
     return next();
   }
@@ -71,6 +73,7 @@ app.get('/', (c) => {
 });
 
 // ---- Mount Routes ----
+app.route('/', superAdminRoutes); // Super Admin - no tenant auth required
 app.route('/', authRoutes);
 app.route('/dashboard', dashboardRoutes);
 app.route('/inventory', inventoryRoutes);
