@@ -184,8 +184,10 @@ function saNav(active: string, adminName: string): string {
 // SA Login
 // ============================================================
 sa.get('/sa/login', (c) => {
-  const cookies = parseCookies(c.req.header('Cookie') ?? null);
-  const error = cookies.sa_error ? decodeURIComponent(cookies.sa_error) : '';
+  const url = new URL(c.req.url);
+  const error = url.searchParams.get('error') ?? '';
+  const errorMsg = error === 'invalid' ? 'Invalid username or password'
+    : error === 'required' ? 'Username and password required' : '';
   const html = saShell('Login', `
   <div class="sa-login-wrap">
     <div class="sa-login-card">
@@ -194,15 +196,15 @@ sa.get('/sa/login', (c) => {
         <h1>Super Admin</h1>
         <p>HotSpot Manager Platform</p>
       </div>
-      ${error ? `<div class="sa-alert sa-alert-error">${error}</div>` : ''}
+      ${errorMsg ? `<div class="sa-alert sa-alert-error">${errorMsg}</div>` : ''}
       <form method="POST" action="/sa/login">
         <div class="sa-form-group">
           <label>Username</label>
-          <input type="text" name="username" required autofocus placeholder="super_admin"/>
+          <input type="text" name="username" required autofocus placeholder="super_admin" autocomplete="username"/>
         </div>
         <div class="sa-form-group">
           <label>Password</label>
-          <input type="password" name="password" required placeholder="••••••••"/>
+          <input type="password" name="password" required placeholder="••••••••" autocomplete="current-password"/>
         </div>
         <button type="submit" class="sa-btn sa-btn-primary" style="width:100%;justify-content:center;padding:.7rem;font-size:.9rem;">Sign In</button>
       </form>
@@ -211,12 +213,7 @@ sa.get('/sa/login', (c) => {
       </div>
     </div>
   </div>`);
-  // Clear error cookie
-  const resp = new Response(html, { headers: { 'Content-Type': 'text/html' } });
-  if (error) {
-    resp.headers.append('Set-Cookie', 'sa_error=; Path=/sa; Max-Age=0');
-  }
-  return resp;
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
 });
 
 sa.post('/sa/login', async (c) => {
@@ -227,10 +224,7 @@ sa.post('/sa/login', async (c) => {
   if (!username || !password) {
     return new Response(null, {
       status: 302,
-      headers: {
-        'Location': '/sa/login',
-        'Set-Cookie': `sa_error=${encodeURIComponent('Username and password required')}; Path=/sa; Max-Age=10`
-      }
+      headers: { 'Location': '/sa/login?error=required' }
     });
   }
 
@@ -242,10 +236,7 @@ sa.post('/sa/login', async (c) => {
   if (!admin) {
     return new Response(null, {
       status: 302,
-      headers: {
-        'Location': '/sa/login',
-        'Set-Cookie': `sa_error=${encodeURIComponent('Invalid username or password')}; Path=/sa; Max-Age=10`
-      }
+      headers: { 'Location': '/sa/login?error=invalid' }
     });
   }
 
@@ -254,7 +245,7 @@ sa.post('/sa/login', async (c) => {
     status: 302,
     headers: {
       'Location': '/sa/dashboard',
-      'Set-Cookie': `sa_session=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`
+      'Set-Cookie': `sa_session=${sessionId}; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=604800`
     }
   });
 });
@@ -268,7 +259,7 @@ sa.get('/sa/logout', async (c) => {
     status: 302,
     headers: {
       'Location': '/sa/login',
-      'Set-Cookie': 'sa_session=; Path=/; HttpOnly; Max-Age=0'
+      'Set-Cookie': 'sa_session=; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=0'
     }
   });
 });
