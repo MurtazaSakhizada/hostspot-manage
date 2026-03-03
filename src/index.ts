@@ -92,11 +92,33 @@ app.delete('/api/inventory/:id', async (c) => {
   return c.json({success: true});
 });
 
+app.delete('/api/inventory-batch/:id', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const id = c.req.param('id');
+  const batch = await c.env.DB.prepare('SELECT * FROM inventory_batches WHERE id=? AND company_id=?').bind(id, user.company_id).first<any>();
+  if (!batch) return c.json({error:'Not found'}, 404);
+  await c.env.DB.prepare('DELETE FROM inventory_batch_lines WHERE batch_id=?').bind(id).run();
+  await c.env.DB.prepare('DELETE FROM inventory_batches WHERE id=? AND company_id=?').bind(id, user.company_id).run();
+  return c.json({success: true});
+});
+
 app.delete('/api/allocations/:id', async (c) => {
   const user = c.get('user');
   if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
   const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM allocations WHERE id=? AND company_id=?').bind(id, user.company_id).run();
+  return c.json({success:true});
+});
+
+app.delete('/api/allocation-batch/:id', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const id = c.req.param('id');
+  const batch = await c.env.DB.prepare('SELECT * FROM allocation_batches WHERE id=? AND company_id=?').bind(id, user.company_id).first<any>();
+  if (!batch) return c.json({error:'Not found'}, 404);
+  await c.env.DB.prepare('DELETE FROM allocation_batch_lines WHERE batch_id=?').bind(id).run();
+  await c.env.DB.prepare('DELETE FROM allocation_batches WHERE id=? AND company_id=?').bind(id, user.company_id).run();
   return c.json({success:true});
 });
 
