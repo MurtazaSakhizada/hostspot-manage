@@ -6,6 +6,7 @@ import { t, type Lang } from '../lib/i18n';
 import type { SessionUser } from '../lib/auth';
 import { pageShell } from '../lib/layout';
 import { formatMoney } from '../lib/calc';
+import { createNotification } from './notifications';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -163,6 +164,22 @@ payments.post('/', async (c) => {
     branch_id ? parseInt(branch_id) : null,
     amount, payment_date, type, notes||null
   ).run();
+
+  // Get seller name for notification
+  const seller = await c.env.DB.prepare('SELECT full_name FROM users WHERE id=? AND company_id=?')
+    .bind(seller_id, user.company_id).first<{full_name:string}>();
+  const typeLabels: Record<string,string> = {
+    commission: 'Commission', advance: 'Advance', settlement: 'Settlement', other: 'Payment'
+  };
+  await createNotification(c.env.DB, {
+    company_id: user.company_id,
+    user_id: null, // broadcast to all owners
+    type: 'success',
+    category: 'payment',
+    title: `💳 ${typeLabels[type]??'Payment'} recorded`,
+    message: `${formatMoney(amount)} paid to ${seller?.full_name??'seller'} on ${payment_date}`,
+    link: '/payments',
+  });
 
   return new Response(null, { status: 302, headers: { 'Location': '/payments' } });
 });

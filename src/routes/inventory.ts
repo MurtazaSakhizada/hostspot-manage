@@ -6,6 +6,7 @@ import { t, type Lang } from '../lib/i18n';
 import type { SessionUser } from '../lib/auth';
 import { pageShell } from '../lib/layout';
 import { calculate, formatGB, formatMoney } from '../lib/calc';
+import { createNotification } from './notifications';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -346,6 +347,17 @@ inventory.post('/', async (c) => {
       VALUES (?,?,?,?,?,?,?,?,?)`
     ).bind(user.company_id, branch_id, l.pkg_id, l.qty, calc.total_gb, calc.gross_amount, 0, calc.gross_amount, `Batch #${batch.id}`).run();
   }
+
+  // Create notification
+  const branchRow = await c.env.DB.prepare('SELECT name FROM branches WHERE id=?').bind(branch_id).first<{name:string}>();
+  await createNotification(c.env.DB, {
+    company_id: user.company_id,
+    type: 'success',
+    category: 'inventory',
+    title: 'Stock-In Recorded',
+    message: `${formatGB(Math.round(totalGb*100)/100)} added to ${branchRow?.name ?? 'branch'} · Value: ${formatMoney(Math.round(totalGross*100)/100)}`,
+    link: '/inventory'
+  });
 
   return new Response(null, { status: 302, headers: { 'Location': '/inventory' } });
 });

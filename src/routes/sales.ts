@@ -6,6 +6,7 @@ import { t, type Lang } from '../lib/i18n';
 import type { SessionUser } from '../lib/auth';
 import { pageShell } from '../lib/layout';
 import { calculate, formatGB, formatMoney } from '../lib/calc';
+import { createNotification } from './notifications';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -249,6 +250,17 @@ sales.post('/', async (c) => {
     calc.total_gb, calc.gross_amount, seller.commission_rate,
     calc.commission_amount, calc.net_amount, notes||null
   ).run();
+
+  // Notification
+  await createNotification(c.env.DB, {
+    company_id: user.company_id,
+    user_id: user.id,
+    type: 'success',
+    category: 'sale',
+    title: 'Sale Recorded',
+    message: `${quantity}× ${pkg.name} (${formatGB(calc.total_gb)}) by ${seller.full_name} · ${formatMoney(calc.gross_amount)}`,
+    link: '/sales'
+  });
 
   return new Response(null, { status: 302, headers: { 'Location': '/sales' } });
 });

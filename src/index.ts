@@ -18,6 +18,7 @@ import paymentsRoutes from './routes/payments';
 import reportsRoutes from './routes/reports';
 import adminRoutes from './routes/admin';
 import superAdminRoutes from './routes/superadmin';
+import notificationsRoutes from './routes/notifications';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -81,6 +82,7 @@ app.route('/allocations', allocationsRoutes);
 app.route('/sales', salesRoutes);
 app.route('/payments', paymentsRoutes);
 app.route('/reports', reportsRoutes);
+app.route('/notifications', notificationsRoutes);
 app.route('/', adminRoutes);
 
 // ---- API: Delete endpoints (re-mount under app root) ----

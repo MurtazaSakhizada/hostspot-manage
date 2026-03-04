@@ -6,6 +6,7 @@ import { t, type Lang } from '../lib/i18n';
 import type { SessionUser } from '../lib/auth';
 import { pageShell } from '../lib/layout';
 import { calculate, formatGB, formatMoney } from '../lib/calc';
+import { createNotification } from './notifications';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -411,6 +412,17 @@ allocations.post('/', async (c) => {
       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(user.company_id, seller_id, branch_id, l.pkg_id, l.qty, calc.total_gb, calc.gross_amount, commRate, calc.commission_amount, calc.net_amount, `Batch #${batch.id}`).run();
   }
+
+  // Fetch seller name for notification
+  const sellerRow = await c.env.DB.prepare('SELECT full_name FROM users WHERE id=?').bind(seller_id).first<{full_name:string}>();
+  await createNotification(c.env.DB, {
+    company_id: user.company_id,
+    type: 'info',
+    category: 'allocation',
+    title: 'Allocation Recorded',
+    message: `${formatGB(round2(totalGb))} allocated to ${sellerRow?.full_name ?? 'seller'} \u00b7 Net: ${formatMoney(round2(totalNet))}`,
+    link: '/allocations'
+  });
 
   return new Response(null, { status: 302, headers: { 'Location': '/allocations' } });
 });
