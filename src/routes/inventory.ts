@@ -19,6 +19,12 @@ const inventory = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 inventory.get('/', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
+
+  // Sellers have no access to company stock — redirect to their allocations
+  if (user.role !== 'owner') {
+    return new Response(null, { status: 302, headers: { 'Location': '/allocations' } });
+  }
+
   const tab = new URL(c.req.url).searchParams.get('tab') ?? 'history';
 
   // ---- Batch history ----

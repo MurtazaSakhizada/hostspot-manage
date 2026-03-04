@@ -18,6 +18,12 @@ const reports = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 reports.get('/', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
+
+  // Reports are owner-only
+  if (user.role !== 'owner') {
+    return new Response(null, { status: 302, headers: { 'Location': '/dashboard' } });
+  }
+
   const groupBy = c.req.query('group') ?? 'date';
   const from = c.req.query('from') ?? '';
   const to = c.req.query('to') ?? '';
@@ -365,6 +371,7 @@ function getMonthStart() { const d = new Date(); d.setDate(1); return d.toISOStr
 reports.get('/pdf', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
+  if (user.role !== 'owner') return new Response(null, { status: 302, headers: { 'Location': '/dashboard' } });
   const from = c.req.query('from') ?? '';
   const to   = c.req.query('to')   ?? '';
 
@@ -750,6 +757,7 @@ reports.get('/pdf', async (c) => {
 // ============================================================
 reports.get('/csv', async (c) => {
   const user = c.get('user');
+  if (user.role !== 'owner') return new Response(null, { status: 302, headers: { 'Location': '/dashboard' } });
   const from = c.req.query('from') ?? '';
   const to = c.req.query('to') ?? '';
   let dateFilter = '';

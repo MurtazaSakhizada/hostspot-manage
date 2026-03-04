@@ -419,6 +419,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
     allocRemaining,
     monthlySales,
     chart7,
+    paymentsByType,
   ] = await Promise.all([
 
     // 1. Sales in selected period
@@ -518,6 +519,13 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       FROM sales WHERE company_id=? AND seller_id=?
         AND snapshot_time >= datetime('now','-6 days','start of day')
       GROUP BY day ORDER BY day ASC`)
+      .bind(user.company_id, user.id).all<any>(),
+
+    // 11. Payments breakdown by type
+    db.prepare(`
+      SELECT type, COALESCE(SUM(amount),0) as total, COUNT(*) as cnt
+      FROM payments WHERE company_id=? AND seller_id=?
+      GROUP BY type ORDER BY total DESC`)
       .bind(user.company_id, user.id).all<any>(),
   ]);
 
@@ -912,6 +920,57 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
         <div style="color:${balanceColor};font-weight:700;font-size:1.1rem">${balanceSign}${formatMoney(Math.abs(balance))}</div>
       </div>
     </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       ROW 6 – FINANCIAL SUMMARY (مصارف / مالی خلاصه)
+  ══════════════════════════════════════════ -->
+  <div class="card" style="margin-bottom:1rem">
+    <div class="card-header">
+      <div class="card-title">💸 ${lang === 'fa' ? 'مالی خلاصه' : lang === 'ps' ? 'مالي لنډیز' : 'Financial Summary'}</div>
+      <span style="font-size:.75rem;color:var(--text-muted)">${lang === 'fa' ? 'تاریخچه دریافت‌ها' : lang === 'ps' ? 'د تادیاتو تاریخچه' : 'All-time payment history'}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;padding:1rem">
+
+      <!-- Commission Earned -->
+      <div style="background:linear-gradient(135deg,#fef9c3,var(--bg-secondary));border-radius:10px;padding:1rem;border:1px solid #fde68a">
+        <div style="font-size:.72rem;color:#92400e;font-weight:600;margin-bottom:.4rem">🏷️ ${lang === 'fa' ? 'کمیسیون کسب شده' : lang === 'ps' ? 'ګټل شوی کمیشن' : 'Commission Earned'}</div>
+        <div style="font-size:1.4rem;font-weight:700;color:#b45309">${formatMoney(allTimeComm)}</div>
+        <div style="font-size:.72rem;color:#92400e;margin-top:.25rem">${soldAll?.cnt ?? 0} ${lang === 'fa' ? 'فروش' : lang === 'ps' ? 'پلور' : 'sales'}</div>
+      </div>
+
+      <!-- Total Received -->
+      <div style="background:linear-gradient(135deg,#dcfce7,var(--bg-secondary));border-radius:10px;padding:1rem;border:1px solid #86efac">
+        <div style="font-size:.72rem;color:#14532d;font-weight:600;margin-bottom:.4rem">✅ ${lang === 'fa' ? 'مجموع دریافت شده' : lang === 'ps' ? 'ټول تادیه شوي' : 'Total Received'}</div>
+        <div style="font-size:1.4rem;font-weight:700;color:#15803d">${formatMoney(totalPaid)}</div>
+        <div style="font-size:.72rem;color:#14532d;margin-top:.25rem">${paidRow?.cnt ?? 0} ${lang === 'fa' ? 'پرداخت' : lang === 'ps' ? 'تادیه' : 'payments'}</div>
+      </div>
+
+      <!-- Balance Due -->
+      <div style="background:${balance > 0 ? 'linear-gradient(135deg,#ede9fe,var(--bg-secondary))' : balance < 0 ? 'linear-gradient(135deg,#fee2e2,var(--bg-secondary))' : 'var(--bg-secondary)'};border-radius:10px;padding:1rem;border:1px solid ${balance > 0 ? '#c4b5fd' : balance < 0 ? '#fca5a5' : 'var(--border)'}">
+        <div style="font-size:.72rem;color:${balance > 0 ? '#5b21b6' : balance < 0 ? '#991b1b' : 'var(--text-muted)'};font-weight:600;margin-bottom:.4rem">⚖️ ${lang === 'fa' ? 'مانده حساب' : lang === 'ps' ? 'بیلانس' : 'Balance Due'}</div>
+        <div style="font-size:1.4rem;font-weight:700;color:${balanceColor}">${balanceSign}${formatMoney(Math.abs(balance))}</div>
+        <div style="font-size:.72rem;color:${balanceColor};margin-top:.25rem">${balance > 0 ? (lang === 'fa' ? '✅ شرکت به شما بدهکار است' : lang === 'ps' ? '✅ شرکت تاسو ته پور لري' : '✅ Company owes you') : balance < 0 ? (lang === 'fa' ? '⚠️ پیش‌پرداخت دریافت شده' : lang === 'ps' ? '⚠️ پیش تادیه ترلاسه شوې' : '⚠️ Advance received') : (lang === 'fa' ? '✓ تسویه شده' : lang === 'ps' ? '✓ تصفیه شوې' : '✓ Settled')}</div>
+      </div>
+    </div>
+
+    ${(paymentsByType?.results || []).length ? `
+    <!-- Payment Breakdown by Type -->
+    <div style="padding:0 1rem 1rem">
+      <div style="font-size:.78rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">${lang === 'fa' ? 'دریافت‌ها بر اساس نوع' : lang === 'ps' ? 'د ډول پر بنسټ تادیات' : 'Payments Breakdown by Type'}</div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        ${(paymentsByType?.results || []).map((p: any) => `
+          <div style="background:var(--bg-tertiary,var(--bg-secondary));border-radius:8px;padding:.5rem .875rem;border:1px solid var(--border)">
+            <span class="badge ${
+              p.type === 'commission'  ? 'badge-success' :
+              p.type === 'advance'     ? 'badge-warning' :
+              p.type === 'settlement'  ? 'badge-info'    : 'badge-primary'
+            }" style="font-size:.7rem;text-transform:capitalize">${p.type}</span>
+            <span style="margin-left:.5rem;font-weight:600;color:var(--text-primary);font-size:.85rem">${formatMoney(p.total)}</span>
+            <span style="font-size:.72rem;color:var(--text-muted)"> × ${p.cnt}</span>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
   </div>
 
   <!-- Chart.js Script -->

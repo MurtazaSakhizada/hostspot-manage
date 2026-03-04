@@ -20,12 +20,17 @@ export function pageShell(opts: {
   const isOwner = user?.role === 'owner';
 
   const navLinks = user ? `
+    <!-- ── ALL USERS ─────────────────────────── -->
     <a href="/dashboard" class="nav-link ${activePage === 'dashboard' ? 'active' : ''}">
       <i class="icon-chart"></i><span>${t(lang, 'dashboard')}</span>
     </a>
+
+    ${isOwner ? `
+    <!-- ── OWNER ONLY ─────────────────────────── -->
     <a href="/inventory" class="nav-link ${activePage === 'inventory' ? 'active' : ''}">
       <i class="icon-box"></i><span>${t(lang, 'inventory')}</span>
-    </a>
+    </a>` : ''}
+
     <a href="/allocations" class="nav-link ${activePage === 'allocations' ? 'active' : ''}">
       <i class="icon-share"></i><span>${t(lang, 'allocations')}</span>
     </a>
@@ -35,13 +40,20 @@ export function pageShell(opts: {
     <a href="/payments" class="nav-link ${activePage === 'payments' ? 'active' : ''}">
       <i class="icon-card"></i><span>${t(lang, 'payments')}</span>
     </a>
+
+    ${isOwner ? `
     <a href="/reports" class="nav-link ${activePage === 'reports' ? 'active' : ''}">
       <i class="icon-file"></i><span>${t(lang, 'reports')}</span>
-    </a>
+    </a>` : ''}
+
     <a href="/notifications" class="nav-link ${activePage === 'notifications' ? 'active' : ''}" style="position:relative">
-      <i class="icon-bell">🔔</i><span>Notifications</span>
+      <i class="icon-bell">🔔</i><span>${lang === 'fa' ? 'اعلانات' : lang === 'ps' ? 'خبرتیاوې' : 'Notifications'}</span>
     </a>
+
     ${isOwner ? `
+    <div style="margin:.5rem 1rem .25rem;font-size:.65rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);font-weight:600">
+      ${lang === 'fa' ? 'مدیریت' : lang === 'ps' ? 'مدیریت' : 'Management'}
+    </div>
     <a href="/branches" class="nav-link ${activePage === 'branches' ? 'active' : ''}">
       <i class="icon-building"></i><span>${t(lang, 'branches')}</span>
     </a>
@@ -52,10 +64,10 @@ export function pageShell(opts: {
       <i class="icon-people"></i><span>${t(lang, 'users')}</span>
     </a>
     <a href="/expenses" class="nav-link ${activePage === 'expenses' ? 'active' : ''}">
-      <i class="icon-minus">💸</i><span>Expenses</span>
+      <i class="icon-minus">💸</i><span>${lang === 'fa' ? 'مصارف' : lang === 'ps' ? 'لګښتونه' : 'Expenses'}</span>
     </a>
     <a href="/settings" class="nav-link ${activePage === 'settings' ? 'active' : ''}">
-      <i class="icon-gear">⚙️</i><span>Settings</span>
+      <i class="icon-gear">⚙️</i><span>${t(lang, 'settings')}</span>
     </a>` : ''}
   ` : '';
 
