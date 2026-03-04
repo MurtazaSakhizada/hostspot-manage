@@ -16,7 +16,7 @@ const payments = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 payments.get('/', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
-  const sellerFilter = user.role === 'seller' ? `AND p.seller_id = ${user.id}` : '';
+  const sellerFilter = user.role === 'seller' ? `AND seller_id = ${user.id}` : '';
 
   const items = await c.env.DB.prepare(`
     SELECT p.*, u.full_name as seller_name, b.name as branch_name

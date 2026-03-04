@@ -396,268 +396,614 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
 }
 
 // ============================================================
-// SELLER DASHBOARD - Complete rebuild
+// SELLER DASHBOARD - Full rebuild with bug fixes
 // ============================================================
 async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, period: string): Promise<string> {
+
+  // ── Date filter for selected period ────────────────────────
   let dateFilter = '';
-  if (period === 'today') dateFilter = `AND date(snapshot_time) = date('now')`;
-  else if (period === 'week')  dateFilter = `AND snapshot_time >= datetime('now','-7 days')`;
-  else if (period === 'month') dateFilter = `AND snapshot_time >= datetime('now','-30 days')`;
-  else if (period === 'year')  dateFilter = `AND snapshot_time >= datetime('now','-365 days')`;
+  if (period === 'today') dateFilter = `AND date(s.snapshot_time) = date('now')`;
+  else if (period === 'week')  dateFilter = `AND s.snapshot_time >= datetime('now','-7 days')`;
+  else if (period === 'month') dateFilter = `AND s.snapshot_time >= datetime('now','-30 days')`;
+  else if (period === 'year')  dateFilter = `AND s.snapshot_time >= datetime('now','-365 days')`;
 
-  // Sales by period
-  const sold = await db.prepare(`
-    SELECT COALESCE(SUM(total_gb),0) as gb,
-           COALESCE(SUM(gross_amount),0) as gross,
-           COALESCE(SUM(commission_amount),0) as comm,
-           COALESCE(SUM(net_amount),0) as net,
-           COUNT(*) as cnt
-    FROM sales WHERE company_id=? AND seller_id=? ${dateFilter}`)
-    .bind(user.company_id, user.id).first<any>();
+  // ── Run all queries in parallel ──────────────────────────
+  const [
+    soldPeriod,
+    soldAll,
+    paidRow,
+    allocTotals,
+    recentSales,
+    recentAllocs,
+    recentPayments,
+    allocRemaining,
+    monthlySales,
+    chart7,
+  ] = await Promise.all([
 
-  // All-time sales (for totals)
-  const soldAll = await db.prepare(`
-    SELECT COALESCE(SUM(total_gb),0) as gb,
-           COALESCE(SUM(commission_amount),0) as comm
-    FROM sales WHERE company_id=? AND seller_id=?`)
-    .bind(user.company_id, user.id).first<any>();
+    // 1. Sales in selected period
+    db.prepare(`
+      SELECT COALESCE(SUM(total_gb),0) as gb,
+             COALESCE(SUM(gross_amount),0) as gross,
+             COALESCE(SUM(commission_amount),0) as comm,
+             COALESCE(SUM(net_amount),0) as net,
+             COUNT(*) as cnt
+      FROM sales s WHERE s.company_id=? AND s.seller_id=? ${dateFilter}`)
+      .bind(user.company_id, user.id).first<any>(),
 
-  // Total payments received
-  const paidRow = await db.prepare(`
-    SELECT COALESCE(SUM(amount),0) as total, COUNT(*) as cnt
-    FROM payments WHERE company_id=? AND seller_id=?`)
-    .bind(user.company_id, user.id).first<any>();
+    // 2. All-time totals
+    db.prepare(`
+      SELECT COALESCE(SUM(total_gb),0) as gb,
+             COALESCE(SUM(gross_amount),0) as gross,
+             COALESCE(SUM(commission_amount),0) as comm,
+             COUNT(*) as cnt
+      FROM sales WHERE company_id=? AND seller_id=?`)
+      .bind(user.company_id, user.id).first<any>(),
 
-  // Balance owed (commission - paid)
-  const totalComm = soldAll?.comm ?? 0;
-  const totalPaid = paidRow?.total ?? 0;
-  const balance   = totalComm - totalPaid; // positive = owed to seller
+    // 3. Total payments received (all-time)
+    db.prepare(`
+      SELECT COALESCE(SUM(amount),0) as total, COUNT(*) as cnt
+      FROM payments WHERE company_id=? AND seller_id=?`)
+      .bind(user.company_id, user.id).first<any>(),
 
-  // Allocation totals (stock given to this seller)
-  const allocTotals = await db.prepare(`
-    SELECT COALESCE(SUM(total_gb),0) as gb, COUNT(*) as batches
-    FROM allocation_batches WHERE company_id=? AND seller_id=?`)
-    .bind(user.company_id, user.id).first<any>();
+    // 4. Allocation totals (all-time GB allocated)
+    db.prepare(`
+      SELECT COALESCE(SUM(total_gb),0) as gb,
+             COALESCE(SUM(total_gross),0) as gross,
+             COUNT(*) as batches
+      FROM allocation_batches WHERE company_id=? AND seller_id=?`)
+      .bind(user.company_id, user.id).first<any>(),
 
-  // Recent sales
-  const recentSales = await db.prepare(`
-    SELECT s.snapshot_time, p.name as pkg_name, p.size_gb, b.name as branch_name,
-           s.quantity, s.total_gb, s.gross_amount, s.commission_amount, s.net_amount
-    FROM sales s
-    JOIN packages p ON p.id=s.package_id
-    JOIN branches b ON b.id=s.branch_id
-    WHERE s.company_id=? AND s.seller_id=?
-    ORDER BY s.snapshot_time DESC LIMIT 15`)
-    .bind(user.company_id, user.id).all<any>();
+    // 5. Recent sales (last 20) with package + branch name
+    db.prepare(`
+      SELECT s.id, s.snapshot_time, s.quantity, s.total_gb,
+             s.gross_amount, s.commission_amount, s.net_amount,
+             s.commission_rate, s.notes,
+             p.name as pkg_name, p.size_gb,
+             b.name as branch_name
+      FROM sales s
+      JOIN packages p ON p.id = s.package_id
+      JOIN branches b ON b.id = s.branch_id
+      WHERE s.company_id=? AND s.seller_id=?
+      ORDER BY s.snapshot_time DESC LIMIT 20`)
+      .bind(user.company_id, user.id).all<any>(),
 
-  // Recent allocations
-  const recentAllocs = await db.prepare(`
-    SELECT ab.created_at, br.name as branch_name, ab.total_gb, ab.total_gross
-    FROM allocation_batches ab
-    JOIN branches br ON br.id=ab.branch_id
-    WHERE ab.company_id=? AND ab.seller_id=?
-    ORDER BY ab.created_at DESC LIMIT 10`)
-    .bind(user.company_id, user.id).all<any>();
+    // 6. Recent allocations (last 10)
+    db.prepare(`
+      SELECT ab.id, ab.created_at, ab.total_gb, ab.total_gross,
+             ab.commission_rate, ab.notes,
+             br.name as branch_name
+      FROM allocation_batches ab
+      JOIN branches br ON br.id = ab.branch_id
+      WHERE ab.company_id=? AND ab.seller_id=?
+      ORDER BY ab.created_at DESC LIMIT 10`)
+      .bind(user.company_id, user.id).all<any>(),
 
-  // Recent payments
-  const recentPayments = await db.prepare(`
-    SELECT payment_date, type, amount, notes
-    FROM payments WHERE company_id=? AND seller_id=?
-    ORDER BY payment_date DESC, created_at DESC LIMIT 8`)
-    .bind(user.company_id, user.id).all<any>();
+    // 7. Recent payments (last 10)
+    db.prepare(`
+      SELECT p.id, p.payment_date, p.type, p.amount, p.notes,
+             b.name as branch_name
+      FROM payments p
+      LEFT JOIN branches b ON b.id = p.branch_id
+      WHERE p.company_id=? AND p.seller_id=?
+      ORDER BY p.payment_date DESC, p.created_at DESC LIMIT 10`)
+      .bind(user.company_id, user.id).all<any>(),
 
-  // Sales chart last 7 days
-  const chart7 = await db.prepare(`
-    SELECT strftime('%Y-%m-%d', snapshot_time) as day,
-           COALESCE(SUM(total_gb),0) as gb,
-           COALESCE(SUM(commission_amount),0) as comm,
-           COUNT(*) as cnt
-    FROM sales WHERE company_id=? AND seller_id=? AND snapshot_time >= datetime('now','-7 days')
-    GROUP BY day ORDER BY day ASC`)
-    .bind(user.company_id, user.id).all<any>();
+    // 8. Remaining inventory (allocated GB − sold GB)
+    db.prepare(`
+      SELECT
+        COALESCE((SELECT SUM(total_gb) FROM allocation_batches WHERE company_id=? AND seller_id=?),0)
+        - COALESCE((SELECT SUM(total_gb) FROM sales WHERE company_id=? AND seller_id=?),0)
+        as remaining_gb`)
+      .bind(user.company_id, user.id, user.company_id, user.id).first<{remaining_gb:number}>(),
 
+    // 9. Monthly sales trend (last 6 months)
+    db.prepare(`
+      SELECT strftime('%Y-%m', snapshot_time) as month,
+             COALESCE(SUM(total_gb),0) as gb,
+             COALESCE(SUM(gross_amount),0) as gross,
+             COALESCE(SUM(commission_amount),0) as comm,
+             COUNT(*) as cnt
+      FROM sales WHERE company_id=? AND seller_id=?
+      GROUP BY month ORDER BY month DESC LIMIT 6`)
+      .bind(user.company_id, user.id).all<any>(),
+
+    // 10. Last 7 days chart data
+    db.prepare(`
+      SELECT strftime('%Y-%m-%d', snapshot_time) as day,
+             COALESCE(SUM(total_gb),0) as gb,
+             COALESCE(SUM(gross_amount),0) as gross,
+             COALESCE(SUM(commission_amount),0) as comm,
+             COUNT(*) as cnt
+      FROM sales WHERE company_id=? AND seller_id=?
+        AND snapshot_time >= datetime('now','-6 days','start of day')
+      GROUP BY day ORDER BY day ASC`)
+      .bind(user.company_id, user.id).all<any>(),
+  ]);
+
+  // ── Derived values ────────────────────────────────────────
+  const allTimeComm  = soldAll?.comm  ?? 0;
+  const allTimeGb    = soldAll?.gb    ?? 0;
+  const totalPaid    = paidRow?.total ?? 0;
+  const balance      = allTimeComm - totalPaid; // positive = company owes seller
+  const remainingGb  = Math.max(0, allocRemaining?.remaining_gb ?? 0);
+
+  // ── Chart: last 7 days ────────────────────────────────────
   const days7: string[] = [];
   for (let i = 6; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate()-i);
+    const d = new Date(); d.setDate(d.getDate() - i);
     days7.push(d.toISOString().split('T')[0]);
   }
-  const chartMap = Object.fromEntries((chart7.results||[]).map((r:any)=>[r.day,r]));
-  const chartLabels = JSON.stringify(days7.map(d=>new Date(d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric'})));
-  const chartGb   = JSON.stringify(days7.map(d=>Math.round((chartMap[d]?.gb??0)*100)/100));
-  const chartComm = JSON.stringify(days7.map(d=>Math.round(chartMap[d]?.comm??0)));
+  const chartMap = Object.fromEntries((chart7.results || []).map((r: any) => [r.day, r]));
+  const chartLabels = JSON.stringify(days7.map(d =>
+    new Date(d).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' })));
+  const chartGb   = JSON.stringify(days7.map(d => Math.round((chartMap[d]?.gb   ?? 0) * 100) / 100));
+  const chartGross = JSON.stringify(days7.map(d => Math.round(chartMap[d]?.gross ?? 0)));
+  const chartComm  = JSON.stringify(days7.map(d => Math.round(chartMap[d]?.comm  ?? 0)));
+  const chartCnt   = JSON.stringify(days7.map(d => chartMap[d]?.cnt ?? 0));
 
+  // ── Period label ──────────────────────────────────────────
+  const periodLabel = period === 'today' ? 'Today'
+    : period === 'week'  ? 'This Week'
+    : period === 'month' ? 'This Month'
+    : period === 'year'  ? 'This Year'
+    : 'All Time';
+
+  // ── Period selector buttons ───────────────────────────────
   const periodBtns = ['today','week','month','year','all'].map(p => `
-    <a href="/dashboard?period=${p}" class="btn btn-sm ${period===p?'btn-primary':'btn-outline'}">${
-      p==='all'?'All Time':p==='today'?'Today':p==='week'?'This Week':p==='month'?'This Month':'This Year'
+    <a href="/dashboard?period=${p}"
+       class="btn btn-sm ${period === p ? 'btn-primary' : 'btn-outline'}"
+       style="white-space:nowrap">${
+         p === 'today' ? '📅 Today'
+       : p === 'week'  ? '📅 This Week'
+       : p === 'month' ? '📅 This Month'
+       : p === 'year'  ? '📅 This Year'
+       :                 '📅 All Time'
     }</a>`).join('');
 
-  const saleRows = (recentSales.results||[]).map((s:any) => `
+  // ── Helper: format date ───────────────────────────────────
+  function fdate(d: string) {
+    return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  }
+  function ftime(d: string) {
+    return new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  // ── Sale rows ─────────────────────────────────────────────
+  const saleRows = (recentSales.results || []).map((s: any, i: number) => `
     <tr>
-      <td><div class="font-bold">${new Date(s.snapshot_time).toLocaleDateString('en-GB')}</div></td>
-      <td>${s.branch_name}</td>
-      <td>${s.pkg_name} <span class="badge badge-primary" style="font-size:.7rem">${s.size_gb}GB</span></td>
-      <td class="text-center">${s.quantity}</td>
+      <td>
+        <div class="font-bold" style="font-size:.85rem">${fdate(s.snapshot_time)}</div>
+        <div style="font-size:.7rem;color:var(--text-muted)">${ftime(s.snapshot_time)}</div>
+      </td>
+      <td>
+        <span style="font-size:.82rem">${s.branch_name}</span>
+      </td>
+      <td>
+        <div class="font-bold" style="font-size:.82rem">${s.pkg_name}</div>
+        <span class="badge badge-primary" style="font-size:.68rem">${s.size_gb} GB</span>
+      </td>
+      <td class="text-center font-bold">${s.quantity}</td>
       <td class="text-primary font-bold">${formatGB(s.total_gb)}</td>
-      <td class="text-warning">${formatMoney(s.commission_amount)}</td>
-      <td class="text-success font-bold">${formatMoney(s.net_amount)}</td>
+      <td style="color:#0891b2">${formatMoney(s.gross_amount)}</td>
+      <td class="text-warning font-bold">${formatMoney(s.commission_amount)}</td>
+      <td style="font-size:.75rem;color:var(--text-muted)">${Math.round(s.commission_rate * 100)}%</td>
+      <td style="font-size:.78rem;color:var(--text-muted)">${s.notes || '—'}</td>
     </tr>`).join('');
 
-  const allocRows = (recentAllocs.results||[]).map((a:any) => `
-    <div class="summary-row">
-      <div>
-        <div class="font-bold">${formatGB(a.total_gb)}</div>
-        <div style="font-size:.75rem;color:var(--text-muted)">${a.branch_name} · ${new Date(a.created_at).toLocaleDateString('en-GB')}</div>
-      </div>
-      <span class="summary-value gb">${formatMoney(a.total_gross)}</span>
-    </div>`).join('');
+  // ── Allocation rows ───────────────────────────────────────
+  const allocRows = (recentAllocs.results || []).map((a: any) => `
+    <tr>
+      <td>
+        <div style="font-size:.82rem">${fdate(a.created_at)}</div>
+        <div style="font-size:.7rem;color:var(--text-muted)">${ftime(a.created_at)}</div>
+      </td>
+      <td><span style="font-size:.82rem">${a.branch_name}</span></td>
+      <td class="text-primary font-bold">${formatGB(a.total_gb)}</td>
+      <td style="color:#0891b2">${formatMoney(a.total_gross)}</td>
+      <td><span class="badge badge-info" style="font-size:.7rem">${Math.round(a.commission_rate * 100)}%</span></td>
+      <td style="font-size:.78rem;color:var(--text-muted)">${a.notes || '—'}</td>
+    </tr>`).join('');
 
-  const paymentRows = (recentPayments.results||[]).map((p:any) => `
-    <div class="summary-row">
-      <div>
-        <div class="font-bold" style="text-transform:capitalize">${p.type}</div>
-        <div style="font-size:.75rem;color:var(--text-muted)">${p.payment_date}${p.notes?` · ${p.notes}`:''}</div>
-      </div>
-      <span class="summary-value money" style="color:var(--success)">+${formatMoney(p.amount)}</span>
-    </div>`).join('');
+  // ── Payment rows ──────────────────────────────────────────
+  const paymentRows = (recentPayments.results || []).map((p: any) => `
+    <tr>
+      <td><div style="font-size:.82rem">${fdate(p.payment_date)}</div></td>
+      <td>
+        <span class="badge ${
+          p.type === 'commission'  ? 'badge-success' :
+          p.type === 'advance'     ? 'badge-warning' :
+          p.type === 'settlement'  ? 'badge-info'    : 'badge-primary'
+        }" style="text-transform:capitalize;font-size:.72rem">${p.type}</span>
+      </td>
+      <td style="font-size:.82rem">${p.branch_name || '—'}</td>
+      <td class="font-bold" style="color:var(--success)">+${formatMoney(p.amount)}</td>
+      <td style="font-size:.78rem;color:var(--text-muted)">${p.notes || '—'}</td>
+    </tr>`).join('');
+
+  // ── Monthly trend rows ────────────────────────────────────
+  const monthlyRows = (monthlySales.results || []).map((m: any) => `
+    <tr>
+      <td class="font-bold">${m.month}</td>
+      <td class="text-primary">${formatGB(m.gb)}</td>
+      <td style="color:#0891b2">${formatMoney(m.gross)}</td>
+      <td class="text-warning">${formatMoney(m.comm)}</td>
+      <td style="font-size:.8rem;color:var(--text-muted);text-align:center">${m.cnt}</td>
+    </tr>`).join('');
+
+  // ── Balance card style ────────────────────────────────────
+  const balanceColor  = balance > 0  ? 'var(--success)' : balance < 0 ? 'var(--danger)' : 'var(--text-muted)';
+  const balanceBg     = balance > 0  ? 'linear-gradient(135deg,#dcfce7,var(--bg-secondary))'
+                      : balance < 0  ? 'linear-gradient(135deg,#fee2e2,var(--bg-secondary))'
+                      : '';
+  const balanceLabel  = balance > 0  ? '✅ Company owes you'
+                      : balance < 0  ? '⚠️ You received advance'
+                      : '✓ Settled';
+  const balanceSign   = balance >= 0 ? '+' : '';
 
   return `
+  <!-- Page Header -->
   <div class="page-header">
     <div>
       <div class="page-title">👋 ${user.full_name}</div>
-      <div class="page-subtitle">Seller Dashboard · ${period==='all'?'All Time':period==='today'?'Today':period==='week'?'This Week':period==='month'?'This Month':'This Year'}</div>
+      <div class="page-subtitle">Seller Dashboard · ${periodLabel}</div>
     </div>
-    <a href="/sales/add" class="btn btn-primary">+ Record Sale</a>
+    <a href="/sales/add" class="btn btn-primary">
+      <span style="font-size:1.1rem">+</span> Record Sale
+    </a>
   </div>
 
   <!-- Period Filter -->
-  <div style="margin-bottom:1.25rem">
-    <div class="btn-group">${periodBtns}</div>
+  <div style="margin-bottom:1.25rem;display:flex;gap:.4rem;flex-wrap:wrap">
+    ${periodBtns}
   </div>
 
-  <!-- KPIs -->
+  <!-- ══════════════════════════════════════════
+       ROW 1 – KPI CARDS (6 cards)
+  ══════════════════════════════════════════ -->
   <div class="stats-grid" style="margin-bottom:1.25rem">
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:var(--primary)"></div>
-      <div class="stat-label">GB Allocated (Total)</div>
-      <div class="stat-value primary">${formatGB(allocTotals?.gb ?? 0)}</div>
-      <div class="stat-sub">${allocTotals?.batches??0} allocations</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:var(--success)"></div>
-      <div class="stat-label">GB Sold (${period==='all'?'All':period})</div>
-      <div class="stat-value success">${formatGB(sold?.gb ?? 0)}</div>
-      <div class="stat-sub">${sold?.cnt ?? 0} transactions</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:#0891b2"></div>
-      <div class="stat-label">Gross Revenue</div>
-      <div class="stat-value" style="color:#0891b2">${formatMoney(sold?.gross ?? 0)}</div>
-      <div class="stat-sub">${period==='all'?'All time':'Period'}</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:var(--warning)"></div>
-      <div class="stat-label">Commission Earned</div>
-      <div class="stat-value warning">${formatMoney(sold?.comm ?? 0)}</div>
-      <div class="stat-sub">${period==='all'?'':'All-time: '+formatMoney(totalComm)}</div>
-    </div>
+
+    <!-- GB Remaining (available to sell) -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#7c3aed"></div>
-      <div class="stat-label">Total Paid to You</div>
-      <div class="stat-value" style="color:#7c3aed">${formatMoney(totalPaid)}</div>
-      <div class="stat-sub">${paidRow?.cnt??0} payments</div>
+      <div class="stat-label">📦 GB Available</div>
+      <div class="stat-value" style="color:#7c3aed">${formatGB(remainingGb)}</div>
+      <div class="stat-sub">Allocated − Sold (all‑time)</div>
     </div>
-    <div class="stat-card" style="${balance>50?'background:linear-gradient(135deg,#fee2e2,var(--bg-secondary))':balance<-50?'background:linear-gradient(135deg,var(--success-light,#dcfce7),var(--bg-secondary))':''}">
-      <div class="stat-card-accent" style="background:${balance>50?'var(--danger)':balance<-50?'var(--success)':'var(--text-muted)'}"></div>
-      <div class="stat-label">💰 Your Balance</div>
-      <div class="stat-value" style="color:${balance>50?'var(--danger)':balance<-50?'var(--success)':'var(--text-muted)'}">
-        ${balance>0?'+':''}${formatMoney(balance)}
-      </div>
-      <div class="stat-sub">${balance>0?'Owed to you':balance<0?'Advance received':'Settled ✓'}</div>
+
+    <!-- GB Sold in period -->
+    <div class="stat-card">
+      <div class="stat-card-accent" style="background:var(--success)"></div>
+      <div class="stat-label">📤 GB Sold</div>
+      <div class="stat-value success">${formatGB(soldPeriod?.gb ?? 0)}</div>
+      <div class="stat-sub">${soldPeriod?.cnt ?? 0} txns · ${periodLabel}</div>
+    </div>
+
+    <!-- Gross Revenue in period -->
+    <div class="stat-card">
+      <div class="stat-card-accent" style="background:#0891b2"></div>
+      <div class="stat-label">💵 Gross Revenue</div>
+      <div class="stat-value" style="color:#0891b2">${formatMoney(soldPeriod?.gross ?? 0)}</div>
+      <div class="stat-sub">${periodLabel}</div>
+    </div>
+
+    <!-- Commission in period -->
+    <div class="stat-card">
+      <div class="stat-card-accent" style="background:var(--warning)"></div>
+      <div class="stat-label">🏷 Commission Earned</div>
+      <div class="stat-value warning">${formatMoney(soldPeriod?.comm ?? 0)}</div>
+      <div class="stat-sub">All‑time: ${formatMoney(allTimeComm)}</div>
+    </div>
+
+    <!-- Total Paid -->
+    <div class="stat-card">
+      <div class="stat-card-accent" style="background:var(--primary)"></div>
+      <div class="stat-label">💳 Total Paid to You</div>
+      <div class="stat-value primary">${formatMoney(totalPaid)}</div>
+      <div class="stat-sub">${paidRow?.cnt ?? 0} payments received</div>
+    </div>
+
+    <!-- Balance -->
+    <div class="stat-card" style="${balanceBg ? `background:${balanceBg}` : ''}">
+      <div class="stat-card-accent" style="background:${balanceColor}"></div>
+      <div class="stat-label">⚖️ Your Balance</div>
+      <div class="stat-value" style="color:${balanceColor}">${balanceSign}${formatMoney(Math.abs(balance))}</div>
+      <div class="stat-sub">${balanceLabel}</div>
     </div>
   </div>
 
-  <!-- Chart + Allocations side by side -->
-  <div style="display:grid;grid-template-columns:1fr 280px;gap:1rem;margin-bottom:1rem">
+  <!-- ══════════════════════════════════════════
+       ROW 2 – CHART + MONTHLY TREND
+  ══════════════════════════════════════════ -->
+  <div style="display:grid;grid-template-columns:1fr 340px;gap:1rem;margin-bottom:1rem">
+
+    <!-- Chart: Last 7 days -->
     <div class="card">
       <div class="card-header">
         <div class="card-title">📈 My Sales — Last 7 Days</div>
-        <div style="font-size:.72rem;color:var(--text-muted)">
+        <div style="display:flex;gap:1rem;font-size:.72rem;color:var(--text-muted)">
           <span style="color:var(--primary)">● GB Sold</span>
-          &nbsp;<span style="color:var(--warning)">● Commission</span>
+          <span style="color:var(--warning)">● Commission</span>
+          <span style="color:#0891b2">● Gross</span>
         </div>
       </div>
-      <canvas id="sellerChart" height="130"></canvas>
-    </div>
-    <div class="card" style="overflow:hidden">
-      <div class="card-header">
-        <div class="card-title">🔀 Allocations</div>
-        <a href="/allocations" class="btn btn-outline btn-sm">All →</a>
+      <div style="padding:.75rem 1rem 1rem">
+        <canvas id="sellerChart" height="140"></canvas>
       </div>
-      ${allocRows || `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">🔀</div><h3>No allocations</h3></div>`}
     </div>
-  </div>
 
-  <!-- Sales table + Payments side by side -->
-  <div style="display:grid;grid-template-columns:1fr 280px;gap:1rem">
+    <!-- Monthly Trend -->
     <div class="card">
       <div class="card-header">
-        <div class="card-title">💰 Recent Sales</div>
-        <a href="/sales" class="btn btn-outline btn-sm">All Sales →</a>
+        <div class="card-title">📅 Monthly Trend</div>
+        <span style="font-size:.72rem;color:var(--text-muted)">Last 6 months</span>
       </div>
-      ${(recentSales.results||[]).length ? `
+      ${(monthlySales.results || []).length ? `
       <div class="table-wrapper">
         <table>
-          <thead><tr>
-            <th>Date</th>
-            <th>Branch</th>
-            <th>Package</th>
-            <th>Qty</th>
-            <th>GB</th>
-            <th>Comm.</th>
-            <th>Net</th>
-          </tr></thead>
-          <tbody>${saleRows}</tbody>
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>GB</th>
+              <th>Gross</th>
+              <th>Comm.</th>
+              <th style="text-align:center">Txns</th>
+            </tr>
+          </thead>
+          <tbody>${monthlyRows}</tbody>
         </table>
-      </div>` : `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">💰</div><h3>No sales yet</h3><p><a href="/sales/add">Add your first sale →</a></p></div>`}
-    </div>
-    <div class="card" style="overflow:hidden">
-      <div class="card-header">
-        <div class="card-title">💳 Payments</div>
-        <a href="/payments" class="btn btn-outline btn-sm">All →</a>
-      </div>
-      ${paymentRows || `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">💳</div><h3>No payments</h3></div>`}
-      ${totalPaid>0?`<div style="padding:.75rem 1rem;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-weight:600">
-        <span>Total received</span><span style="color:var(--success)">${formatMoney(totalPaid)}</span>
-      </div>`:''}
+      </div>` : `
+      <div class="empty-state" style="padding:2rem">
+        <div class="empty-state-icon">📅</div>
+        <h3>No monthly data yet</h3>
+      </div>`}
     </div>
   </div>
 
+  <!-- ══════════════════════════════════════════
+       ROW 3 – RECENT SALES TABLE (full width)
+  ══════════════════════════════════════════ -->
+  <div class="card" style="margin-bottom:1rem">
+    <div class="card-header">
+      <div class="card-title">💰 Recent Sales
+        <span class="badge badge-primary" style="margin-left:.5rem;font-size:.72rem">${(recentSales.results||[]).length}</span>
+      </div>
+      <a href="/sales" class="btn btn-outline btn-sm">All Sales →</a>
+    </div>
+    ${(recentSales.results || []).length ? `
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Date/Time</th>
+            <th>Branch</th>
+            <th>Package</th>
+            <th style="text-align:center">Qty</th>
+            <th>GB</th>
+            <th>Gross</th>
+            <th>Commission</th>
+            <th>Rate</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>${saleRows}</tbody>
+      </table>
+    </div>
+    <div style="padding:.75rem 1rem;border-top:1px solid var(--border);display:flex;gap:2rem;font-size:.82rem;flex-wrap:wrap">
+      <span>All‑time GB sold: <strong class="text-primary">${formatGB(allTimeGb)}</strong></span>
+      <span>Shown period gross: <strong style="color:#0891b2">${formatMoney(soldPeriod?.gross??0)}</strong></span>
+      <span>Shown period commission: <strong class="text-warning">${formatMoney(soldPeriod?.comm??0)}</strong></span>
+    </div>` : `
+    <div class="empty-state" style="padding:2.5rem">
+      <div class="empty-state-icon">💰</div>
+      <h3>No sales yet</h3>
+      <p>Start recording your sales to track performance.</p>
+      <a href="/sales/add" class="btn btn-primary">+ Record First Sale</a>
+    </div>`}
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       ROW 4 – ALLOCATIONS + PAYMENTS
+  ══════════════════════════════════════════ -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
+
+    <!-- Allocations -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🔀 Stock Allocations
+          <span class="badge badge-info" style="margin-left:.5rem;font-size:.72rem">${allocTotals?.batches ?? 0}</span>
+        </div>
+        <a href="/allocations" class="btn btn-outline btn-sm">View All →</a>
+      </div>
+      <div style="padding:.5rem 1rem;background:var(--bg-tertiary,var(--bg-secondary));display:flex;gap:2rem;font-size:.82rem;border-bottom:1px solid var(--border)">
+        <span>Total Allocated: <strong class="text-primary">${formatGB(allocTotals?.gb ?? 0)}</strong></span>
+        <span>Remaining: <strong style="color:#7c3aed">${formatGB(remainingGb)}</strong></span>
+      </div>
+      ${(recentAllocs.results || []).length ? `
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Branch</th>
+              <th>GB</th>
+              <th>Value</th>
+              <th>Rate</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>${allocRows}</tbody>
+        </table>
+      </div>` : `
+      <div class="empty-state" style="padding:1.5rem">
+        <div class="empty-state-icon">🔀</div>
+        <h3>No allocations yet</h3>
+      </div>`}
+    </div>
+
+    <!-- Payments -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">💳 Payments Received
+          <span class="badge badge-success" style="margin-left:.5rem;font-size:.72rem">${paidRow?.cnt ?? 0}</span>
+        </div>
+        <a href="/payments" class="btn btn-outline btn-sm">All Payments →</a>
+      </div>
+      <div style="padding:.5rem 1rem;background:var(--bg-tertiary,var(--bg-secondary));display:flex;gap:2rem;font-size:.82rem;border-bottom:1px solid var(--border)">
+        <span>Earned: <strong class="text-warning">${formatMoney(allTimeComm)}</strong></span>
+        <span>Received: <strong class="text-success">${formatMoney(totalPaid)}</strong></span>
+        <span>Balance: <strong style="color:${balanceColor}">${balanceSign}${formatMoney(Math.abs(balance))}</strong></span>
+      </div>
+      ${(recentPayments.results || []).length ? `
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Type</th>
+              <th>Branch</th>
+              <th>Amount</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>${paymentRows}</tbody>
+        </table>
+      </div>` : `
+      <div class="empty-state" style="padding:1.5rem">
+        <div class="empty-state-icon">💳</div>
+        <h3>No payments received yet</h3>
+      </div>`}
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       ROW 5 – ALL-TIME SUMMARY BANNER
+  ══════════════════════════════════════════ -->
+  <div style="background:linear-gradient(135deg,#1e1b4b,#312e81);border-radius:12px;padding:1rem 1.5rem;margin-bottom:1rem">
+    <div style="color:#a5b4fc;font-size:.75rem;font-weight:600;margin-bottom:.6rem;letter-spacing:.05em">📊 ALL‑TIME PERFORMANCE SUMMARY</div>
+    <div style="display:flex;flex-wrap:wrap;gap:2rem;align-items:center">
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.72rem">Total Allocated</div>
+        <div style="color:#e2e8f0;font-weight:700;font-size:1rem">${formatGB(allocTotals?.gb ?? 0)}</div>
+      </div>
+      <div style="color:#475569">→</div>
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.72rem">Total Sold</div>
+        <div style="color:#4ade80;font-weight:700;font-size:1rem">${formatGB(allTimeGb)}</div>
+      </div>
+      <div style="color:#475569">→</div>
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.72rem">Remaining</div>
+        <div style="color:#818cf8;font-weight:700;font-size:1rem">${formatGB(remainingGb)}</div>
+      </div>
+      <div style="width:1px;height:40px;background:#334155;margin:0 .5rem"></div>
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.72rem">Commission Earned</div>
+        <div style="color:#fbbf24;font-weight:700;font-size:1rem">${formatMoney(allTimeComm)}</div>
+      </div>
+      <div style="color:#475569">−</div>
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.72rem">Paid to You</div>
+        <div style="color:#34d399;font-weight:700;font-size:1rem">${formatMoney(totalPaid)}</div>
+      </div>
+      <div style="color:#475569">=</div>
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.72rem">Balance Owed</div>
+        <div style="color:${balanceColor};font-weight:700;font-size:1.1rem">${balanceSign}${formatMoney(Math.abs(balance))}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart.js Script -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script>
-  const sCtx = document.getElementById('sellerChart');
-  if(sCtx) {
-    new Chart(sCtx, {
-      type:'line',
-      data:{
-        labels:${chartLabels},
-        datasets:[
-          {label:'GB',data:${chartGb},borderColor:'var(--primary)',backgroundColor:'rgba(99,102,241,.1)',borderWidth:2,pointRadius:3,tension:.4,fill:true,yAxisID:'y'},
-          {label:'Commission',data:${chartComm},borderColor:'var(--warning)',backgroundColor:'transparent',borderWidth:2,pointRadius:3,tension:.4,yAxisID:'y2'}
+  (function() {
+    const ctx = document.getElementById('sellerChart');
+    if (!ctx) return;
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: ${chartLabels},
+        datasets: [
+          {
+            label: 'GB Sold',
+            data: ${chartGb},
+            backgroundColor: 'rgba(99,102,241,.6)',
+            borderColor: 'var(--primary)',
+            borderWidth: 1.5,
+            borderRadius: 4,
+            yAxisID: 'y'
+          },
+          {
+            label: 'Commission ؋',
+            data: ${chartComm},
+            type: 'line',
+            borderColor: 'var(--warning)',
+            backgroundColor: 'transparent',
+            borderWidth: 2,
+            pointRadius: 4,
+            pointBackgroundColor: 'var(--warning)',
+            tension: 0.4,
+            yAxisID: 'y2'
+          },
+          {
+            label: 'Gross ؋',
+            data: ${chartGross},
+            type: 'line',
+            borderColor: '#0891b2',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            pointRadius: 3,
+            tension: 0.4,
+            borderDash: [4,3],
+            yAxisID: 'y2'
+          }
         ]
       },
-      options:{
-        responsive:true,interaction:{mode:'index',intersect:false},
-        plugins:{legend:{display:false}},
-        scales:{
-          x:{grid:{color:'var(--border)'},ticks:{color:'var(--text-muted)',font:{size:10}}},
-          y:{grid:{color:'var(--border)'},ticks:{color:'var(--text-muted)',font:{size:10},callback:v=>v+' GB'}},
-          y2:{position:'right',grid:{drawOnChartArea:false},ticks:{color:'var(--warning)',font:{size:10},callback:v=>'؋'+Math.round(v).toLocaleString()}}
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                if (ctx.dataset.yAxisID === 'y') return ' ' + ctx.parsed.y.toFixed(1) + ' GB';
+                return ' ؋' + Math.round(ctx.parsed.y).toLocaleString();
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(148,163,184,.1)' },
+            ticks: { color: 'var(--text-muted)', font: { size: 10 } }
+          },
+          y: {
+            position: 'left',
+            grid: { color: 'rgba(148,163,184,.1)' },
+            ticks: {
+              color: 'var(--primary)',
+              font: { size: 10 },
+              callback: v => v + ' GB'
+            }
+          },
+          y2: {
+            position: 'right',
+            grid: { drawOnChartArea: false },
+            ticks: {
+              color: 'var(--warning)',
+              font: { size: 10 },
+              callback: v => '؋' + Math.round(v).toLocaleString()
+            }
+          }
         }
       }
     });
-  }
+  })();
   </script>`;
 }
+
 
 // ---- Router ----
 dashboard.get('/', async (c) => {

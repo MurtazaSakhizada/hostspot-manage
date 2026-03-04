@@ -20,7 +20,7 @@ allocations.get('/', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
 
-  const sellerFilter = user.role === 'seller' ? `AND ab.seller_id = ${user.id}` : '';
+  const sellerFilter = user.role === 'seller' ? `AND seller_id = ${user.id}` : '';
 
   // ---- Batch history ----
   const batches = await c.env.DB.prepare(`
