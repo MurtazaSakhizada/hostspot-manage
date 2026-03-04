@@ -537,4 +537,126 @@ admin.delete('/api/users/:id', async (c) => {
   return c.json({success:true});
 });
 
+// ============================================================
+// Company Settings  GET/POST /settings
+// ============================================================
+admin.get('/settings', async (c) => {
+  const user = c.get('user');
+  const lang = c.get('lang');
+  if (user.role !== 'owner') return c.redirect('/dashboard');
+
+  const company = await c.env.DB.prepare('SELECT * FROM companies WHERE id=?')
+    .bind(user.company_id).first<any>();
+  const settings = JSON.parse(company?.settings || '{}');
+  const purchasePrice = settings.purchase_price_per_gb ?? '';
+
+  const ok  = c.req.query('ok');
+  const err = c.req.query('err');
+  const msgHtml = ok  ? `<div class="alert alert-success">✅ Settings saved successfully.</div>`
+    : err === 'invalid' ? `<div class="alert alert-error">❌ Invalid value. Enter a positive number.</div>`
+    : '';
+
+  return c.html(pageShell({
+    title: 'Company Settings', lang, user, activePage: 'settings',
+    body: `
+    <div class="page-header">
+      <div>
+        <div class="page-title">⚙️ Company Settings</div>
+        <div class="page-subtitle">${company?.name ?? ''}</div>
+      </div>
+    </div>
+
+    ${msgHtml}
+
+    <!-- Purchase Price Card -->
+    <div class="card" style="max-width:520px;margin-bottom:1.25rem">
+      <div class="card-header">
+        <div class="card-title">📦 Purchase Price Configuration</div>
+      </div>
+      <div style="padding:1.25rem">
+        <form method="POST" action="/settings/purchase-price">
+          <div class="form-group">
+            <label style="font-weight:600">Purchase Price per GB (افغانی)</label>
+            <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.5rem">
+              This is the cost you pay to buy 1 GB of internet from your supplier.
+              Used to calculate net profit: <code>Gross Revenue − Commissions − Purchase Cost</code>
+            </div>
+            <div style="display:flex;gap:.75rem;align-items:center">
+              <input type="number" name="purchase_price_per_gb" min="0" step="0.01"
+                value="${purchasePrice}"
+                placeholder="e.g. 8 or 7.5"
+                style="max-width:160px"
+                required/>
+              <span style="color:var(--text-muted);font-size:.9rem">؋ per GB</span>
+            </div>
+          </div>
+          ${purchasePrice ? `
+          <div style="background:var(--bg-tertiary);border-radius:8px;padding:.875rem;margin-bottom:1rem;font-size:.85rem">
+            <strong>Current formula example:</strong><br>
+            If you sell 1,000 GB at ؋20/GB gross → Revenue = ؋20,000<br>
+            Commission (e.g. 10%) = ؋2,000 → After comm: ؋18,000<br>
+            Purchase cost (${purchasePrice} × 1,000) = ؋${(parseFloat(purchasePrice)*1000).toLocaleString()}<br>
+            <strong style="color:var(--success)">Net Profit = ؋${(18000 - parseFloat(purchasePrice)*1000).toLocaleString()}</strong>
+          </div>` : ''}
+          <button type="submit" class="btn btn-primary">💾 Save Purchase Price</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Company Info Card -->
+    <div class="card" style="max-width:520px">
+      <div class="card-header">
+        <div class="card-title">🏢 Company Information</div>
+      </div>
+      <div style="padding:1.25rem">
+        <form method="POST" action="/settings/company-info">
+          <div class="form-group">
+            <label>Company Name</label>
+            <input type="text" name="name" value="${company?.name ?? ''}" required/>
+          </div>
+          <div class="form-group">
+            <label>Default Language</label>
+            <select name="default_language">
+              <option value="fa" ${company?.default_language==='fa'?'selected':''}>فارسی / دری</option>
+              <option value="ps" ${company?.default_language==='ps'?'selected':''}>پښتو</option>
+              <option value="en" ${company?.default_language==='en'?'selected':''}>English</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary">💾 Save Company Info</button>
+        </form>
+      </div>
+    </div>`
+  }));
+});
+
+admin.post('/settings/purchase-price', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.redirect('/dashboard');
+  const form = await c.req.formData();
+  const val = parseFloat(form.get('purchase_price_per_gb')?.toString() ?? '');
+  if (isNaN(val) || val < 0) {
+    return new Response(null, { status: 302, headers: { 'Location': '/settings?err=invalid' } });
+  }
+  // Read current settings and merge
+  const company = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?')
+    .bind(user.company_id).first<{settings:string}>();
+  const settings = JSON.parse(company?.settings || '{}');
+  settings.purchase_price_per_gb = val;
+  await c.env.DB.prepare('UPDATE companies SET settings=? WHERE id=?')
+    .bind(JSON.stringify(settings), user.company_id).run();
+  return new Response(null, { status: 302, headers: { 'Location': '/settings?ok=1' } });
+});
+
+admin.post('/settings/company-info', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.redirect('/dashboard');
+  const form = await c.req.formData();
+  const name = form.get('name')?.toString().trim() ?? '';
+  const lang = form.get('default_language')?.toString() ?? 'fa';
+  if (!name) return new Response(null, { status: 302, headers: { 'Location': '/settings?err=invalid' } });
+  await c.env.DB.prepare('UPDATE companies SET name=?, default_language=? WHERE id=?')
+    .bind(name, lang, user.company_id).run();
+  return new Response(null, { status: 302, headers: { 'Location': '/settings?ok=1' } });
+});
+
 export default admin;

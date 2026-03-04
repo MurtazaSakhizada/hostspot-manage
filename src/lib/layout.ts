@@ -50,6 +50,12 @@ export function pageShell(opts: {
     </a>
     <a href="/users" class="nav-link ${activePage === 'users' ? 'active' : ''}">
       <i class="icon-people"></i><span>${t(lang, 'users')}</span>
+    </a>
+    <a href="/expenses" class="nav-link ${activePage === 'expenses' ? 'active' : ''}">
+      <i class="icon-minus">💸</i><span>Expenses</span>
+    </a>
+    <a href="/settings" class="nav-link ${activePage === 'settings' ? 'active' : ''}">
+      <i class="icon-gear">⚙️</i><span>Settings</span>
     </a>` : ''}
   ` : '';
 

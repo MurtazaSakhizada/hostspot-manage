@@ -152,10 +152,25 @@ inventory.get('/add', async (c) => {
   const branches = await c.env.DB.prepare('SELECT * FROM branches WHERE company_id=? AND active=1').bind(user.company_id).all<any>();
   const packages = await c.env.DB.prepare('SELECT * FROM packages WHERE company_id=? AND active=1 ORDER BY size_gb ASC').bind(user.company_id).all<any>();
 
+  // Get company purchase price
+  const company = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?').bind(user.company_id).first<{settings:string}>();
+  const settings = JSON.parse(company?.settings || '{}');
+  const purchasePricePerGb: number = settings.purchase_price_per_gb ?? 0;
+
   const branchOpts = (branches.results||[]).map((b: any) => `<option value="${b.id}">${b.name}</option>`).join('');
   const pkgOptsForJS = JSON.stringify(
     Object.fromEntries((packages.results||[]).map((p: any) => [p.id, {name: p.name, gb: p.size_gb, price: p.sale_price_per_gb}]))
   );
+
+  const hasPurchasePrice = purchasePricePerGb > 0;
+  const purchasePriceLine = hasPurchasePrice
+    ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:.5rem">
+         Purchase price: <strong style="color:var(--warning)">${formatMoney(purchasePricePerGb)}/GB</strong>
+         — costs shown in yellow below
+       </div>`
+    : `<div style="font-size:.78rem;color:var(--warning);margin-bottom:.5rem">
+         ⚠️ No purchase price set. <a href="/settings" style="color:var(--primary)">Set it in Settings →</a> to track real profit.
+       </div>`;
 
   // Build initial package rows (one per active package)
   const pkgRows = (packages.results||[]).map((p: any) => `
@@ -172,6 +187,7 @@ inventory.get('/add', async (c) => {
       </td>
       <td id="gb_${p.id}" class="text-primary font-bold">—</td>
       <td id="val_${p.id}" class="text-success">—</td>
+      ${hasPurchasePrice ? `<td id="cost_${p.id}" class="text-warning" style="font-size:.85rem">—</td>` : ''}
     </tr>`).join('');
 
   return c.html(pageShell({
@@ -199,16 +215,17 @@ inventory.get('/add', async (c) => {
         <!-- Package Quantities -->
         <div class="form-group">
           <label style="font-weight:600;font-size:.9rem">📋 Enter Quantities per Package</label>
-          <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:.5rem">Leave 0 for packages not included in this batch</div>
+          ${purchasePriceLine}
           <div class="table-wrapper" style="border:1px solid var(--border);border-radius:8px">
             <table>
               <thead><tr>
                 <th>Package</th>
                 <th>Quantity</th>
                 <th>Total GB</th>
-                <th>Value</th>
+                <th>Sale Value</th>
+                ${hasPurchasePrice ? `<th style="color:var(--warning)">Purchase Cost</th>` : ''}
               </tr></thead>
-              <tbody>${pkgRows || '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:1rem">No packages configured. <a href="/packages">Add packages first →</a></td></tr>'}</tbody>
+              <tbody>${pkgRows || `<tr><td colspan="${hasPurchasePrice?5:4}" style="text-align:center;color:var(--text-muted);padding:1rem">No packages configured. <a href="/packages">Add packages first →</a></td></tr>`}</tbody>
             </table>
           </div>
         </div>
@@ -222,7 +239,7 @@ inventory.get('/add', async (c) => {
         <!-- Live Summary -->
         <div class="calc-preview" id="batch-summary" style="display:none">
           <div style="font-size:.85rem;font-weight:600;margin-bottom:.75rem">📊 Batch Summary</div>
-          <div class="calc-preview-grid" style="grid-template-columns:repeat(3,1fr)">
+          <div class="calc-preview-grid" style="grid-template-columns:repeat(${hasPurchasePrice?4:3},1fr)">
             <div class="calc-item">
               <div class="calc-item-label">Packages Included</div>
               <div class="calc-item-value" id="sum-pkgs">0</div>
@@ -232,9 +249,14 @@ inventory.get('/add', async (c) => {
               <div class="calc-item-value main" id="sum-gb">0 GB</div>
             </div>
             <div class="calc-item">
-              <div class="calc-item-label">Total Value</div>
+              <div class="calc-item-label">Sale Value</div>
               <div class="calc-item-value" id="sum-val">؋ 0</div>
             </div>
+            ${hasPurchasePrice ? `
+            <div class="calc-item">
+              <div class="calc-item-label" style="color:var(--warning)">Purchase Cost</div>
+              <div class="calc-item-value" id="sum-cost" style="color:var(--warning)">؋ 0</div>
+            </div>` : ''}
           </div>
         </div>
 
@@ -246,6 +268,7 @@ inventory.get('/add', async (c) => {
     </div>`,
     scripts: `<script>
     const PKGS = ${pkgOptsForJS};
+    const PURCHASE_PRICE = ${purchasePricePerGb};
 
     function updateRow(pkgId) {
       const qty = parseInt(document.getElementById('qty_'+pkgId).value) || 0;
@@ -253,8 +276,11 @@ inventory.get('/add', async (c) => {
       if (!p) return;
       const gb = p.gb * qty;
       const val = gb * p.price;
+      const cost = gb * PURCHASE_PRICE;
       document.getElementById('gb_'+pkgId).textContent = qty > 0 ? gb.toFixed(gb%1===0?0:2)+' GB' : '—';
       document.getElementById('val_'+pkgId).textContent = qty > 0 ? '؋ '+val.toLocaleString() : '—';
+      const costEl = document.getElementById('cost_'+pkgId);
+      if (costEl) costEl.textContent = qty > 0 && PURCHASE_PRICE > 0 ? '؋ '+Math.round(cost).toLocaleString() : '—';
       updateSummary();
     }
 
@@ -275,6 +301,8 @@ inventory.get('/add', async (c) => {
       document.getElementById('sum-pkgs').textContent = pkgCount+' type'+(pkgCount!==1?'s':'');
       document.getElementById('sum-gb').textContent = totalGb.toFixed(totalGb%1===0?0:2)+' GB';
       document.getElementById('sum-val').textContent = '؋ '+Math.round(totalVal).toLocaleString();
+      const costEl = document.getElementById('sum-cost');
+      if (costEl && PURCHASE_PRICE > 0) costEl.textContent = '؋ '+Math.round(totalGb*PURCHASE_PRICE).toLocaleString();
       const summary = document.getElementById('batch-summary');
       const btn = document.getElementById('submit-btn');
       if (pkgCount > 0) {
@@ -300,8 +328,11 @@ inventory.post('/', async (c) => {
   const branch_id = parseInt(form.get('branch_id')?.toString() ?? '0');
   const notes = form.get('notes')?.toString() ?? '';
 
-  // Get all packages for this company
+  // Get all packages for this company + purchase price from settings
   const packages = await c.env.DB.prepare('SELECT * FROM packages WHERE company_id=? AND active=1').bind(user.company_id).all<any>();
+  const co = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?').bind(user.company_id).first<{settings:string}>();
+  const coSettings = JSON.parse(co?.settings || '{}');
+  const purchasePricePerGb: number = coSettings.purchase_price_per_gb ?? 0;
 
   // Build lines from form data
   type LineData = { pkg_id: number; qty: number; size_gb: number; price: number };
@@ -324,12 +355,21 @@ inventory.post('/', async (c) => {
     totalGb += calc.total_gb;
     totalGross += calc.gross_amount;
   }
+  const totalPurchaseCost = Math.round(totalGb * purchasePricePerGb * 100) / 100;
 
-  // Insert batch
+  // Insert batch (now with purchase_cost + purchase_price_per_gb)
   const batch = await c.env.DB.prepare(`
-    INSERT INTO inventory_batches (company_id, branch_id, total_gb, total_gross, total_net, notes)
-    VALUES (?,?,?,?,?,?) RETURNING id`
-  ).bind(user.company_id, branch_id, Math.round(totalGb * 100) / 100, Math.round(totalGross * 100) / 100, Math.round(totalGross * 100) / 100, notes || null).first<{id:number}>();
+    INSERT INTO inventory_batches (company_id, branch_id, total_gb, total_gross, total_net, purchase_cost, purchase_price_per_gb, notes)
+    VALUES (?,?,?,?,?,?,?,?) RETURNING id`
+  ).bind(
+    user.company_id, branch_id,
+    Math.round(totalGb * 100) / 100,
+    Math.round(totalGross * 100) / 100,
+    Math.round(totalGross * 100) / 100,
+    totalPurchaseCost,
+    purchasePricePerGb,
+    notes || null
+  ).first<{id:number}>();
 
   if (!batch) return c.json({error:'Failed to create batch'}, 500);
 
@@ -338,14 +378,14 @@ inventory.post('/', async (c) => {
     const calc = calculate({ size_gb: l.size_gb, quantity: l.qty, sale_price_per_gb: l.price, commission_rate: 0 });
     await c.env.DB.prepare(`
       INSERT INTO inventory_batch_lines (batch_id, company_id, package_id, quantity, size_gb, total_gb, price_per_gb, gross_amount)
-      VALUES (?,?,?,?,?,?,?,?)`
-    ).bind(batch.id, user.company_id, l.pkg_id, l.qty, l.size_gb, calc.total_gb, l.price, calc.gross_amount).run();
+      VALUES (?,?,?,?,?,?,?,?)`)
+    .bind(batch.id, user.company_id, l.pkg_id, l.qty, l.size_gb, calc.total_gb, l.price, calc.gross_amount).run();
 
     // Also insert into legacy inventory table for backward compatibility
     await c.env.DB.prepare(`
       INSERT INTO inventory (company_id, branch_id, package_id, quantity, total_gb, gross_amount, commission_amount, net_amount, notes)
-      VALUES (?,?,?,?,?,?,?,?,?)`
-    ).bind(user.company_id, branch_id, l.pkg_id, l.qty, calc.total_gb, calc.gross_amount, 0, calc.gross_amount, `Batch #${batch.id}`).run();
+      VALUES (?,?,?,?,?,?,?,?,?)`)
+    .bind(user.company_id, branch_id, l.pkg_id, l.qty, calc.total_gb, calc.gross_amount, 0, calc.gross_amount, `Batch #${batch.id}`).run();
   }
 
   // Create notification
