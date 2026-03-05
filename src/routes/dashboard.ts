@@ -430,6 +430,8 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
     monthlySales,
     chart7,
     paymentsByType,
+    personalExpenses,
+    recentPersonalExp,
   ] = await Promise.all([
 
     // 1. Sales in selected period
@@ -451,7 +453,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       FROM sales WHERE company_id=? AND seller_id=?`)
       .bind(user.company_id, user.id).first<any>(),
 
-    // 3. Total payments received (all-time)
+    // 3. Total payments made by seller to owner (all-time)
     db.prepare(`
       SELECT COALESCE(SUM(amount),0) as total, COUNT(*) as cnt
       FROM payments WHERE company_id=? AND seller_id=?`)
@@ -537,6 +539,19 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       FROM payments WHERE company_id=? AND seller_id=?
       GROUP BY type ORDER BY total DESC`)
       .bind(user.company_id, user.id).all<any>(),
+
+    // 12. Seller personal expenses (seller_id = user.id, does NOT affect debt)
+    db.prepare(`
+      SELECT COALESCE(SUM(amount),0) as total, COUNT(*) as cnt
+      FROM expenses WHERE company_id=? AND seller_id=?`)
+      .bind(user.company_id, user.id).first<any>(),
+
+    // 13. Recent personal expenses (last 5)
+    db.prepare(`
+      SELECT category, title, amount, expense_date
+      FROM expenses WHERE company_id=? AND seller_id=?
+      ORDER BY expense_date DESC, created_at DESC LIMIT 5`)
+      .bind(user.company_id, user.id).all<any>(),
   ]);
 
   // ── Derived values ────────────────────────────────────────
@@ -544,10 +559,13 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
   const allTimeGb    = soldAll?.gb    ?? 0;
   const totalPaid    = paidRow?.total ?? 0;
   const allocValue   = allocTotals?.gross ?? 0; // total value of stock given to seller
-  // بدهی فروشنده = ارزش تخصیص − کمیسیون کسب‌شده − پرداخت‌های دریافتی
+  // بدهی فروشنده = ارزش تخصیص − کمیسیون کسب‌شده − پرداخت‌های انجام‌شده توسط فروشنده
   // debt > 0 means seller still owes owner; debt < 0 means owner overpaid
   const debt         = allocValue - allTimeComm - totalPaid;
   const remainingGb  = Math.max(0, allocRemaining?.remaining_gb ?? 0);
+  // Personal expenses: tracking only, NOT part of debt calculation
+  const personalExpTotal = personalExpenses?.total ?? 0;
+  const personalExpCnt   = personalExpenses?.cnt   ?? 0;
 
   // ── Chart: last 7 days ────────────────────────────────────
   const days7: string[] = [];
@@ -635,11 +653,33 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
           p.type === 'commission'  ? 'badge-success' :
           p.type === 'advance'     ? 'badge-warning' :
           p.type === 'settlement'  ? 'badge-info'    : 'badge-primary'
-        }" style="text-transform:capitalize;font-size:.72rem">${p.type}</span>
+        }" style="font-size:.72rem">${
+          p.type === 'commission' ? 'کمیشن' :
+          p.type === 'advance'    ? 'پیش‌پرداخت' :
+          p.type === 'settlement' ? 'تسویه' : p.type
+        }</span>
       </td>
       <td style="font-size:.82rem">${p.branch_name || '—'}</td>
-      <td class="font-bold" style="color:var(--success)">+${formatMoney(p.amount)}</td>
+      <td class="font-bold" style="color:var(--danger)">−${formatMoney(p.amount)}</td>
       <td style="font-size:.78rem;color:var(--text-muted)">${p.notes || '—'}</td>
+    </tr>`).join('');
+
+  // ── Personal expenses rows ────────────────────────────────
+  const personalExpRows = (recentPersonalExp.results || []).map((e: any) => `
+    <tr>
+      <td style="font-size:.82rem">${fdate(e.expense_date)}</td>
+      <td>
+        <span class="badge" style="background:#f43f5e22;color:#f43f5e;border:1px solid #f43f5e44;font-size:.72rem">
+          ${e.category === 'rent' ? '🏠 کرایه' :
+            e.category === 'salary' ? '👤 معاش' :
+            e.category === 'utilities' ? '💡 برق/آب' :
+            e.category === 'maintenance' ? '🔧 ترمیم' :
+            e.category === 'transport' ? '🚗 ترانسپورت' :
+            e.category === 'general' ? '📋 عمومی' : '➕ سایر'}
+        </span>
+      </td>
+      <td style="font-size:.82rem">${e.title}</td>
+      <td class="font-bold" style="color:#f43f5e">−${formatMoney(e.amount)}</td>
     </tr>`).join('');
 
   // ── Monthly trend rows ────────────────────────────────────
@@ -719,12 +759,12 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       <div class="stat-sub">کل: ${formatMoney(allTimeComm)}</div>
     </div>
 
-    <!-- Total Received (paid to seller) -->
+    <!-- Total Paid by Seller to Owner -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--primary)"></div>
-      <div class="stat-label">💳 مجموع دریافتی</div>
+      <div class="stat-label">💳 مجموع پرداختی</div>
       <div class="stat-value primary">${formatMoney(totalPaid)}</div>
-      <div class="stat-sub">${paidRow?.cnt ?? 0} پرداخت دریافت شده</div>
+      <div class="stat-sub">${paidRow?.cnt ?? 0} پرداخت به سیستم</div>
     </div>
 
     <!-- Debt/Balance card -->
@@ -733,6 +773,14 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       <div class="stat-label">⚖️ بدهی / مانده حساب</div>
       <div class="stat-value" style="color:${balanceColor}">${balanceSign}${formatMoney(Math.abs(debt))}</div>
       <div class="stat-sub">${balanceLabel}</div>
+    </div>
+
+    <!-- Personal Expenses card (tracking only, NOT affecting debt) -->
+    <div class="stat-card">
+      <div class="stat-card-accent" style="background:#f43f5e"></div>
+      <div class="stat-label">💸 مصارف شخصی</div>
+      <div class="stat-value" style="color:#f43f5e">${formatMoney(personalExpTotal)}</div>
+      <div class="stat-sub">${personalExpCnt} مصرف · <a href="/expenses" style="color:var(--primary)">مشاهده →</a></div>
     </div>
   </div>
 
@@ -848,12 +896,12 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
         <table>
           <thead>
             <tr>
-              <th>Date</th>
-              <th>Branch</th>
-              <th>GB</th>
-              <th>Value</th>
-              <th>Rate</th>
-              <th>Notes</th>
+              <th>تاریخ</th>
+              <th>شعبه</th>
+              <th>گیگابایت</th>
+              <th>ارزش</th>
+              <th>نرخ</th>
+              <th>یادداشت</th>
             </tr>
           </thead>
           <tbody>${allocRows}</tbody>
@@ -861,33 +909,34 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       </div>` : `
       <div class="empty-state" style="padding:1.5rem">
         <div class="empty-state-icon">🔀</div>
-        <h3>No allocations yet</h3>
+        <h3>هنوز تخصیصی ثبت نشده</h3>
       </div>`}
     </div>
 
     <!-- Payments -->
     <div class="card">
       <div class="card-header">
-        <div class="card-title">💳 Payments Received
+        <div class="card-title">💳 پرداخت‌های فروشنده به سیستم
           <span class="badge badge-success" style="margin-left:.5rem;font-size:.72rem">${paidRow?.cnt ?? 0}</span>
         </div>
-        <a href="/payments" class="btn btn-outline btn-sm">All Payments →</a>
+        <a href="/payments" class="btn btn-outline btn-sm">همه پرداخت‌ها →</a>
       </div>
       <div style="padding:.5rem 1rem;background:var(--bg-tertiary,var(--bg-secondary));display:flex;gap:2rem;font-size:.82rem;border-bottom:1px solid var(--border)">
-        <span>Earned: <strong class="text-warning">${formatMoney(allTimeComm)}</strong></span>
-        <span>Received: <strong class="text-success">${formatMoney(totalPaid)}</strong></span>
-        <span>Balance: <strong style="color:${balanceColor}">${balanceSign}${formatMoney(Math.abs(balance))}</strong></span>
+        <span>ارزش تخصیص: <strong style="color:#0891b2">${formatMoney(allocValue)}</strong></span>
+        <span>کمیشن: <strong class="text-warning">${formatMoney(allTimeComm)}</strong></span>
+        <span>پرداختی: <strong class="text-success">${formatMoney(totalPaid)}</strong></span>
+        <span>بدهی: <strong style="color:${balanceColor}">${balanceSign}${formatMoney(Math.abs(debt))}</strong></span>
       </div>
       ${(recentPayments.results || []).length ? `
       <div class="table-wrapper">
         <table>
           <thead>
             <tr>
-              <th>Date</th>
-              <th>Type</th>
-              <th>Branch</th>
-              <th>Amount</th>
-              <th>Notes</th>
+              <th>تاریخ</th>
+              <th>نوع</th>
+              <th>شعبه</th>
+              <th>مبلغ</th>
+              <th>یادداشت</th>
             </tr>
           </thead>
           <tbody>${paymentRows}</tbody>
@@ -895,9 +944,45 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       </div>` : `
       <div class="empty-state" style="padding:1.5rem">
         <div class="empty-state-icon">💳</div>
-        <h3>No payments received yet</h3>
+        <h3>هنوز پرداختی ثبت نشده</h3>
+        <p style="font-size:.82rem;color:var(--text-muted)">پرداخت‌های شما به مالک اینجا نمایش داده می‌شود</p>
       </div>`}
     </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       ROW 4.5 – PERSONAL EXPENSES (tracking only)
+  ══════════════════════════════════════════ -->
+  <div class="card" style="margin-bottom:1rem">
+    <div class="card-header">
+      <div class="card-title">💸 مصارف شخصی
+        <span class="badge" style="background:#f43f5e22;color:#f43f5e;border:1px solid #f43f5e44;margin-right:.4rem;font-size:.72rem">${personalExpCnt}</span>
+      </div>
+      <a href="/expenses" class="btn btn-outline btn-sm">همه مصارف →</a>
+    </div>
+    <div style="padding:.5rem 1rem;background:linear-gradient(135deg,#fff1f2,var(--bg-secondary));border-bottom:1px solid var(--border);font-size:.78rem;color:#9f1239">
+      ℹ️ این مصارف <strong>صرفاً برای کنترل شخصی</strong> شما ثبت شده و در محاسبه بدهی یا حساب سیستم تأثیر ندارد.
+      مجموع: <strong style="color:#f43f5e">${formatMoney(personalExpTotal)}</strong>
+    </div>
+    ${(recentPersonalExp.results || []).length ? `
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>تاریخ</th>
+            <th>دسته‌بندی</th>
+            <th>عنوان</th>
+            <th>مبلغ</th>
+          </tr>
+        </thead>
+        <tbody>${personalExpRows}</tbody>
+      </table>
+    </div>` : `
+    <div class="empty-state" style="padding:1.5rem">
+      <div class="empty-state-icon">💸</div>
+      <h3>هنوز مصرف شخصی ثبت نشده</h3>
+      <p style="font-size:.82rem;color:var(--text-muted)"><a href="/expenses">+ ثبت اولین مصرف</a></p>
+    </div>`}
   </div>
 
   <!-- ══════════════════════════════════════════
@@ -917,7 +1002,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       </div>
       <div style="color:#475569">−</div>
       <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.72rem">پرداخت دریافتی</div>
+        <div style="color:#94a3b8;font-size:.72rem">پرداختی به مالک</div>
         <div style="color:#34d399;font-weight:700;font-size:1rem">${formatMoney(totalPaid)}</div>
       </div>
       <div style="color:#475569">=</div>
@@ -960,9 +1045,9 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
         <div style="font-size:.72rem;color:#92400e;margin-top:.25rem">${soldAll?.cnt ?? 0} ${lang === 'fa' ? 'فروش' : lang === 'ps' ? 'پلور' : 'sales'}</div>
       </div>
 
-      <!-- Total Received -->
+      <!-- Total Paid by Seller -->
       <div style="background:linear-gradient(135deg,#dcfce7,var(--bg-secondary));border-radius:10px;padding:1rem;border:1px solid #86efac">
-        <div style="font-size:.72rem;color:#14532d;font-weight:600;margin-bottom:.4rem">✅ ${lang === 'fa' ? 'مجموع دریافت شده' : lang === 'ps' ? 'ټول تادیه شوي' : 'Total Received'}</div>
+        <div style="font-size:.72rem;color:#14532d;font-weight:600;margin-bottom:.4rem">💸 ${lang === 'fa' ? 'مجموع پرداختی به مالک' : lang === 'ps' ? 'ټول تادیات مالک ته' : 'Total Paid to Owner'}</div>
         <div style="font-size:1.4rem;font-weight:700;color:#15803d">${formatMoney(totalPaid)}</div>
         <div style="font-size:.72rem;color:#14532d;margin-top:.25rem">${paidRow?.cnt ?? 0} ${lang === 'fa' ? 'پرداخت' : lang === 'ps' ? 'تادیه' : 'payments'}</div>
       </div>

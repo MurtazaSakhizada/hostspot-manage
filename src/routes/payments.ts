@@ -45,7 +45,9 @@ payments.get('/', async (c) => {
       ${user.role==='owner'?`<td><strong>${item.seller_name}</strong></td>`:''}
       <td>${item.branch_name||'—'}</td>
       <td><span class="badge badge-${item.type==='commission'?'warning':item.type==='settlement'?'success':'info'}">${t(lang, item.type as any)}</span></td>
-      <td class="text-success font-bold">${formatMoney(item.amount)}</td>
+      <td class="${user.role==='seller'?'font-bold':'text-success font-bold'}" style="${user.role==='seller'?'color:var(--danger)':''}">
+        ${user.role==='seller'?'−':''}${formatMoney(item.amount)}
+      </td>
       <td>${item.notes||'—'}</td>
       ${user.role==='owner'?`<td><button onclick="confirmDelete('/api/payments/${item.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button></td>`:''}
     </tr>`).join('');
@@ -56,6 +58,7 @@ payments.get('/', async (c) => {
     <div class="page-header">
       <div>
         <div class="page-title">💳 ${t(lang,'payments')}</div>
+        ${user.role === 'seller' ? `<div class="page-subtitle" style="font-size:.82rem;color:var(--text-muted)">${lang === 'fa' ? 'پرداخت‌های شما به مالک سیستم' : lang === 'ps' ? 'ستاسو تادیات مالک ته' : 'Your payments to the system owner'}</div>` : ''}
       </div>
       ${user.role==='owner'?`<a href="/payments/add" class="btn btn-primary">+ ${t(lang,'add_payment')}</a>`:''}
     </div>

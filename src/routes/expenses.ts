@@ -4,6 +4,12 @@
 // POST /expenses         - create expense
 // POST /expenses/:id     - edit expense
 // DELETE /api/expenses/:id - delete
+//
+// LOGIC:
+// • Owner sees company expenses (seller_id IS NULL)
+// • Seller sees only their own personal expenses (seller_id = user.id)
+// • Seller expenses do NOT affect debt/balance calculation
+//   They are purely for personal tracking by the seller.
 // ============================================
 import { Hono } from 'hono';
 import { t, type Lang } from '../lib/i18n';
@@ -43,10 +49,17 @@ expenses.get('/', async (c) => {
   const to   = c.req.query('to')   ?? '';
   const cat  = c.req.query('cat')  ?? 'all';
 
+  // Owner: company expenses (seller_id IS NULL)
+  // Seller: their own personal expenses (seller_id = user.id)
   let where = 'WHERE e.company_id=?';
   const binds: any[] = [user.company_id];
-  // Seller sees only expenses they created
-  if (!isOwner) { where += ` AND e.created_by = ${user.id}`; }
+
+  if (isOwner) {
+    where += ` AND (e.seller_id IS NULL OR e.seller_id = 0)`;
+  } else {
+    where += ` AND e.seller_id = ${user.id}`;
+  }
+
   if (from) { where += ` AND e.expense_date >= ?`; binds.push(from); }
   if (to)   { where += ` AND e.expense_date <= ?`; binds.push(to); }
   if (cat !== 'all') { where += ` AND e.category = ?`; binds.push(cat); }
@@ -57,20 +70,22 @@ expenses.get('/', async (c) => {
     ${where} ORDER BY e.expense_date DESC, e.created_at DESC`);
   const items = await stmt.bind(...binds).all<any>();
 
-  // Totals by category (all time in filter)
-  const totalsCreatorFilter = !isOwner ? ` AND created_by = ${user.id}` : '';
+  // Totals by category (all time, role-scoped)
+  const totalsWhere = isOwner
+    ? `WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0)`
+    : `WHERE company_id=? AND seller_id = ${user.id}`;
   const totals = await c.env.DB.prepare(
     `SELECT category, COALESCE(SUM(amount),0) as total, COUNT(*) as cnt
-     FROM expenses WHERE company_id=? ${totalsCreatorFilter} GROUP BY category ORDER BY total DESC`)
+     FROM expenses ${totalsWhere} GROUP BY category ORDER BY total DESC`)
     .bind(user.company_id).all<any>();
   const grandTotal = (totals.results||[]).reduce((s:number,r:any)=>s+r.total, 0);
 
-  // Period total (within filter) - use e alias consistent with main query
+  // Period total (within filter)
   const periodWhere = where.replace(/e\./g, '');
   const periodTotalRow = await (binds.length > 1
     ? c.env.DB.prepare(`SELECT COALESCE(SUM(amount),0) as t FROM expenses ${periodWhere}`)
         .bind(...binds)
-    : c.env.DB.prepare(`SELECT COALESCE(SUM(amount),0) as t FROM expenses WHERE company_id=?`)
+    : c.env.DB.prepare(`SELECT COALESCE(SUM(amount),0) as t FROM expenses WHERE company_id=? AND ${isOwner ? '(seller_id IS NULL OR seller_id = 0)' : `seller_id = ${user.id}`}`)
         .bind(user.company_id)
   ).first<{t:number}>();
   const periodTotal = periodTotalRow?.t ?? 0;
@@ -113,21 +128,22 @@ expenses.get('/', async (c) => {
       <td><strong>${e.title}</strong></td>
       <td class="text-danger font-bold" style="color:var(--danger)">−${formatMoney(e.amount)}</td>
       <td style="color:var(--text-muted);font-size:.82rem">${e.notes||'—'}</td>
-      <td>${e.creator_name??'—'}</td>
+      ${isOwner ? `<td>${e.creator_name??'—'}</td>` : ''}
       <td>
         <button onclick="openEditExpense(${e.id},'${e.category}','${e.title.replace(/'/g,"\\'")}',${e.amount},'${e.expense_date}','${(e.notes||'').replace(/'/g,"\\'")}',event)"
           class="btn btn-outline btn-sm">✏️</button>
-        <button onclick="confirmDelete('/api/expenses/${e.id}','Delete this expense?')"
+        <button onclick="confirmDelete('/api/expenses/${e.id}','این مصرف حذف شود؟')"
           class="btn btn-danger btn-sm">🗑</button>
       </td>
     </tr>`).join('');
 
+  const colSpan = isOwner ? '7' : '6';
   const emptyState = `
-    <tr><td colspan="7">
+    <tr><td colspan="${colSpan}">
       <div class="empty-state">
         <div class="empty-state-icon">💸</div>
         <h3>هنوز مصرفی ثبت نشده</h3>
-        <p>مصارف خود را ثبت کنید.</p>
+        <p>مصارف شخصی خود را ثبت کنید.</p>
       </div>
     </td></tr>`;
 
@@ -135,16 +151,32 @@ expenses.get('/', async (c) => {
     `<option value="${c2.key}">${c2.label}</option>`
   ).join('');
 
+  // Seller notice banner: expenses are personal, not affecting debt
+  const sellerNoticeBanner = !isOwner ? `
+    <div style="background:linear-gradient(135deg,#fef3c7,#fffbeb);border:1px solid #fcd34d;
+         border-radius:10px;padding:.75rem 1rem;margin-bottom:1rem;display:flex;gap:.75rem;align-items:flex-start">
+      <span style="font-size:1.2rem">ℹ️</span>
+      <div>
+        <div style="font-weight:700;color:#92400e;font-size:.88rem">مصارف شخصی فروشنده</div>
+        <div style="color:#78350f;font-size:.78rem;margin-top:.2rem">
+          این مصارف <strong>صرفاً برای کنترل شخصی شما</strong> ثبت می‌شود و در محاسبه بدهی یا حساب سیستم
+          تأثیری ندارد. مانده حساب شما فقط بر اساس تخصیص، کمیشن و پرداخت‌ها محاسبه می‌شود.
+        </div>
+      </div>
+    </div>` : '';
+
   return c.html(pageShell({
-    title: 'Expenses', lang, user, activePage: 'expenses',
+    title: isOwner ? 'مصارف شرکت' : 'مصارف شخصی', lang, user, activePage: 'expenses',
     body: `
     <div class="page-header">
       <div>
-        <div class="page-title">💸 مصارف</div>
-        <div class="page-subtitle">ثبت مصارف · ${from||to ? `${from||'از ابتدا'} → ${to||'امروز'}` : 'همه وقت'}</div>
+        <div class="page-title">${isOwner ? '💸 مصارف شرکت' : '💸 مصارف شخصی'}</div>
+        <div class="page-subtitle">${isOwner ? 'مصارف عملیاتی شرکت' : 'ثبت مصارف شخصی'} · ${from||to ? `${from||'از ابتدا'} → ${to||'امروز'}` : 'همه وقت'}</div>
       </div>
       <button onclick="document.getElementById('add-exp-modal').classList.add('open')" class="btn btn-primary">+ ثبت مصرف</button>
     </div>
+
+    ${sellerNoticeBanner}
 
     <!-- Summary row -->
     <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:1.25rem">
@@ -198,7 +230,7 @@ expenses.get('/', async (c) => {
                 <th>عنوان</th>
                 <th>مبلغ</th>
                 <th>یادداشت</th>
-                <th>ثبت‌کننده</th>
+                ${isOwner ? '<th>ثبت‌کننده</th>' : ''}
                 <th>عملیات</th>
               </tr></thead>
               <tbody>${rows || emptyState}</tbody>
@@ -213,7 +245,7 @@ expenses.get('/', async (c) => {
           <div class="card-title">📊 خلاصه دسته‌بندی</div>
         </div>
         <div style="padding:.75rem">
-          ${totalRows || '<div style="color:var(--text-muted);text-align:center;padding:1rem;font-size:.85rem">No expenses</div>'}
+          ${totalRows || '<div style="color:var(--text-muted);text-align:center;padding:1rem;font-size:.85rem">هنوز مصرفی ثبت نشده</div>'}
           ${grandTotal > 0 ? `<div style="border-top:1px solid var(--border);margin-top:.5rem;padding-top:.5rem;display:flex;justify-content:space-between;font-weight:700">
             <span>مجموع</span><span style="color:var(--danger)">${formatMoney(grandTotal)}</span>
           </div>` : ''}
@@ -225,7 +257,7 @@ expenses.get('/', async (c) => {
     <div class="modal-overlay" id="add-exp-modal">
       <div class="modal" style="max-width:480px">
         <div class="modal-header">
-          <div class="modal-title">➕ ثبت مصرف</div>
+          <div class="modal-title">➕ ثبت مصرف ${isOwner ? 'شرکت' : 'شخصی'}</div>
           <button onclick="document.getElementById('add-exp-modal').classList.remove('open')" class="modal-close">✕</button>
         </div>
         <form method="POST" action="/expenses">
@@ -241,10 +273,10 @@ expenses.get('/', async (c) => {
           </div>
           <div class="form-group">
             <label>عنوان / توضیحات *</label>
-            <input type="text" name="title" required placeholder="مثال: کرایه دفتر، برق..."/>
+            <input type="text" name="title" required placeholder="مثال: کرایه، ترانسپورت..."/>
           </div>
           <div class="form-group">
-            <label>Amount (افغانی) *</label>
+            <label>مبلغ (افغانی) *</label>
             <input type="number" name="amount" min="1" step="0.01" required placeholder="0"/>
           </div>
           <div class="form-group">
@@ -282,7 +314,7 @@ expenses.get('/', async (c) => {
             <input type="text" name="title" id="edit-exp-title" required/>
           </div>
           <div class="form-group">
-            <label>Amount (افغانی) *</label>
+            <label>مبلغ (افغانی) *</label>
             <input type="number" name="amount" id="edit-exp-amount" min="1" step="0.01" required/>
           </div>
           <div class="form-group">
@@ -314,6 +346,7 @@ expenses.get('/', async (c) => {
 // ── POST /expenses ────────────────────────────────────────────
 expenses.post('/', async (c) => {
   const user = c.get('user');
+  const isOwner = user.role === 'owner';
   const form = await c.req.formData();
   const category     = form.get('category')?.toString() ?? 'general';
   const title        = form.get('title')?.toString().trim() ?? '';
@@ -324,16 +357,22 @@ expenses.post('/', async (c) => {
   if (!title || amount <= 0) {
     return new Response(null, { status: 302, headers: { 'Location': '/expenses' } });
   }
+
+  // Owner: seller_id = NULL (company expense)
+  // Seller: seller_id = user.id (personal expense, does not affect debt)
+  const sellerId = isOwner ? null : user.id;
+
   await c.env.DB.prepare(`
-    INSERT INTO expenses (company_id, category, title, amount, expense_date, notes, created_by)
-    VALUES (?,?,?,?,?,?,?)`)
-    .bind(user.company_id, category, title, amount, expense_date, notes||null, user.id).run();
+    INSERT INTO expenses (company_id, category, title, amount, expense_date, notes, created_by, seller_id)
+    VALUES (?,?,?,?,?,?,?,?)`)
+    .bind(user.company_id, category, title, amount, expense_date, notes||null, user.id, sellerId).run();
   return new Response(null, { status: 302, headers: { 'Location': '/expenses' } });
 });
 
 // ── POST /expenses/:id (edit) ─────────────────────────────────
 expenses.post('/:id', async (c) => {
   const user = c.get('user');
+  const isOwner = user.role === 'owner';
   const id = c.req.param('id');
   const form = await c.req.formData();
   const category     = form.get('category')?.toString() ?? 'general';
@@ -342,8 +381,10 @@ expenses.post('/:id', async (c) => {
   const expense_date = form.get('expense_date')?.toString() ?? '';
   const notes        = form.get('notes')?.toString() ?? '';
 
-  // Sellers can only edit their own expenses
-  const editFilter = user.role !== 'owner' ? ` AND created_by = ${user.id}` : '';
+  // Sellers can only edit their own personal expenses
+  const editFilter = isOwner
+    ? ` AND (seller_id IS NULL OR seller_id = 0)`
+    : ` AND seller_id = ${user.id}`;
   await c.env.DB.prepare(`
     UPDATE expenses SET category=?,title=?,amount=?,expense_date=?,notes=?
     WHERE id=? AND company_id=? ${editFilter}`)
@@ -354,9 +395,12 @@ expenses.post('/:id', async (c) => {
 // ── DELETE /api/expenses/:id ──────────────────────────────────
 expenses.delete('/api/expenses/:id', async (c) => {
   const user = c.get('user');
+  const isOwner = user.role === 'owner';
   const id = c.req.param('id');
-  // Sellers can only delete their own expenses; owners can delete any
-  const deleteFilter = user.role !== 'owner' ? ` AND created_by = ${user.id}` : '';
+  // Sellers can only delete their own personal expenses; owners delete company expenses
+  const deleteFilter = isOwner
+    ? ` AND (seller_id IS NULL OR seller_id = 0)`
+    : ` AND seller_id = ${user.id}`;
   await c.env.DB.prepare(`DELETE FROM expenses WHERE id=? AND company_id=? ${deleteFilter}`)
     .bind(id, user.company_id).run();
   return c.json({ success: true });
