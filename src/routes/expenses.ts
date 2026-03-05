@@ -17,13 +17,13 @@ type Variables = { user: SessionUser; lang: Lang };
 const expenses = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 const CATEGORIES = [
-  { key: 'rent',        label: '🏠 Rent',        color: '#6366f1' },
-  { key: 'salary',      label: '👤 Salary',       color: '#0891b2' },
-  { key: 'utilities',   label: '💡 Utilities',    color: '#f59e0b' },
-  { key: 'maintenance', label: '🔧 Maintenance',  color: '#8b5cf6' },
-  { key: 'transport',   label: '🚗 Transport',    color: '#10b981' },
-  { key: 'general',     label: '📋 General',      color: '#64748b' },
-  { key: 'other',       label: '➕ Other',         color: '#94a3b8' },
+  { key: 'rent',        label: '🏠 کرایه',         color: '#6366f1' },
+  { key: 'salary',      label: '👤 معاش',           color: '#0891b2' },
+  { key: 'utilities',   label: '💡 برق/آب/گاز',     color: '#f59e0b' },
+  { key: 'maintenance', label: '🔧 ترمیم',          color: '#8b5cf6' },
+  { key: 'transport',   label: '🚗 ترانسپورت',       color: '#10b981' },
+  { key: 'general',     label: '📋 عمومی',           color: '#64748b' },
+  { key: 'other',       label: '➕ سایر',            color: '#94a3b8' },
 ];
 
 function catLabel(k: string) {
@@ -79,7 +79,7 @@ expenses.get('/', async (c) => {
     `<option value="${c2.key}" ${cat===c2.key?'selected':''}>${c2.label}</option>`
   ).join('');
   const catFilterBtns = [
-    {key:'all',label:'All'},
+    {key:'all',label:'همه'},
     ...CATEGORIES.map(c2=>({key:c2.key,label:c2.label}))
   ].map(c2=>`
     <a href="/expenses?from=${from}&to=${to}&cat=${c2.key}"
@@ -126,8 +126,8 @@ expenses.get('/', async (c) => {
     <tr><td colspan="7">
       <div class="empty-state">
         <div class="empty-state-icon">💸</div>
-        <h3>No expenses yet</h3>
-        <p>Track your business expenses to calculate real net profit.</p>
+        <h3>هنوز مصرفی ثبت نشده</h3>
+        <p>مصارف خود را ثبت کنید.</p>
       </div>
     </td></tr>`;
 
@@ -140,31 +140,31 @@ expenses.get('/', async (c) => {
     body: `
     <div class="page-header">
       <div>
-        <div class="page-title">💸 Expenses (مصارف)</div>
-        <div class="page-subtitle">Track business costs · ${from||to ? `${from||'Start'} → ${to||'Today'}` : 'All Time'}</div>
+        <div class="page-title">💸 مصارف</div>
+        <div class="page-subtitle">ثبت مصارف · ${from||to ? `${from||'از ابتدا'} → ${to||'امروز'}` : 'همه وقت'}</div>
       </div>
-      <button onclick="document.getElementById('add-exp-modal').classList.add('open')" class="btn btn-primary">+ Add Expense</button>
+      <button onclick="document.getElementById('add-exp-modal').classList.add('open')" class="btn btn-primary">+ ثبت مصرف</button>
     </div>
 
     <!-- Summary row -->
     <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:1.25rem">
       <div class="stat-card">
         <div class="stat-card-accent" style="background:var(--danger)"></div>
-        <div class="stat-label">Total Expenses</div>
+        <div class="stat-label">مجموع مصارف</div>
         <div class="stat-value" style="color:var(--danger)">${formatMoney(grandTotal)}</div>
-        <div class="stat-sub">All time</div>
+        <div class="stat-sub">همه وقت</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-accent" style="background:var(--warning)"></div>
-        <div class="stat-label">Period Expenses</div>
+        <div class="stat-label">مصارف دوره</div>
         <div class="stat-value warning">${formatMoney(periodTotal)}</div>
-        <div class="stat-sub">${from||to?'Filtered period':'All time'}</div>
+        <div class="stat-sub">${from||to?'دوره فلتر شده':'همه وقت'}</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-accent" style="background:var(--primary)"></div>
-        <div class="stat-label">Categories</div>
+        <div class="stat-label">دسته‌بندی‌ها</div>
         <div class="stat-value primary">${(totals.results||[]).length}</div>
-        <div class="stat-sub">Expense types</div>
+        <div class="stat-sub">نوع مصرف</div>
       </div>
     </div>
 
@@ -175,16 +175,16 @@ expenses.get('/', async (c) => {
         <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:1rem;align-items:flex-end">
           <form method="GET" action="/expenses" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end">
             <div class="form-group" style="margin:0;min-width:130px">
-              <label style="font-size:.78rem">From</label>
+              <label style="font-size:.78rem">از تاریخ</label>
               <input type="date" name="from" value="${from}"/>
             </div>
             <div class="form-group" style="margin:0;min-width:130px">
-              <label style="font-size:.78rem">To</label>
+              <label style="font-size:.78rem">تا تاریخ</label>
               <input type="date" name="to" value="${to}"/>
             </div>
             <input type="hidden" name="cat" value="${cat}"/>
-            <button type="submit" class="btn btn-outline btn-sm">Filter</button>
-            <a href="/expenses" class="btn btn-ghost btn-sm">Clear</a>
+            <button type="submit" class="btn btn-outline btn-sm">فلتر</button>
+            <a href="/expenses" class="btn btn-ghost btn-sm">پاک کردن</a>
           </form>
         </div>
         <div style="display:flex;gap:.35rem;flex-wrap:wrap;margin-bottom:.875rem">${catFilterBtns}</div>
@@ -193,13 +193,13 @@ expenses.get('/', async (c) => {
           <div class="table-wrapper">
             <table>
               <thead><tr>
-                <th>Date</th>
-                <th>Category</th>
-                <th>Title</th>
-                <th>Amount</th>
-                <th>Notes</th>
-                <th>By</th>
-                <th>Actions</th>
+                <th>تاریخ</th>
+                <th>دسته‌بندی</th>
+                <th>عنوان</th>
+                <th>مبلغ</th>
+                <th>یادداشت</th>
+                <th>ثبت‌کننده</th>
+                <th>عملیات</th>
               </tr></thead>
               <tbody>${rows || emptyState}</tbody>
             </table>
@@ -210,12 +210,12 @@ expenses.get('/', async (c) => {
       <!-- Category breakdown sidebar -->
       <div class="card">
         <div class="card-header">
-          <div class="card-title">📊 By Category</div>
+          <div class="card-title">📊 خلاصه دسته‌بندی</div>
         </div>
         <div style="padding:.75rem">
           ${totalRows || '<div style="color:var(--text-muted);text-align:center;padding:1rem;font-size:.85rem">No expenses</div>'}
           ${grandTotal > 0 ? `<div style="border-top:1px solid var(--border);margin-top:.5rem;padding-top:.5rem;display:flex;justify-content:space-between;font-weight:700">
-            <span>Total</span><span style="color:var(--danger)">${formatMoney(grandTotal)}</span>
+            <span>مجموع</span><span style="color:var(--danger)">${formatMoney(grandTotal)}</span>
           </div>` : ''}
         </div>
       </div>
@@ -225,35 +225,35 @@ expenses.get('/', async (c) => {
     <div class="modal-overlay" id="add-exp-modal">
       <div class="modal" style="max-width:480px">
         <div class="modal-header">
-          <div class="modal-title">➕ Add Expense</div>
+          <div class="modal-title">➕ ثبت مصرف</div>
           <button onclick="document.getElementById('add-exp-modal').classList.remove('open')" class="modal-close">✕</button>
         </div>
         <form method="POST" action="/expenses">
           <div class="form-row">
             <div class="form-group">
-              <label>Category *</label>
+              <label>دسته‌بندی *</label>
               <select name="category" required>${catOptsNew}</select>
             </div>
             <div class="form-group">
-              <label>Date *</label>
+              <label>تاریخ *</label>
               <input type="date" name="expense_date" required value="${new Date().toISOString().split('T')[0]}"/>
             </div>
           </div>
           <div class="form-group">
-            <label>Title / Description *</label>
-            <input type="text" name="title" required placeholder="e.g. Office rent, Electricity bill..."/>
+            <label>عنوان / توضیحات *</label>
+            <input type="text" name="title" required placeholder="مثال: کرایه دفتر، برق..."/>
           </div>
           <div class="form-group">
             <label>Amount (افغانی) *</label>
             <input type="number" name="amount" min="1" step="0.01" required placeholder="0"/>
           </div>
           <div class="form-group">
-            <label>Notes (optional)</label>
-            <textarea name="notes" rows="2" placeholder="Additional details..."></textarea>
+            <label>یادداشت (اختیاری)</label>
+            <textarea name="notes" rows="2" placeholder="توضیحات اضافی..."></textarea>
           </div>
           <div class="modal-footer" style="border:none;padding:0;margin-top:1rem">
-            <button type="button" onclick="document.getElementById('add-exp-modal').classList.remove('open')" class="btn btn-outline">Cancel</button>
-            <button type="submit" class="btn btn-primary">💾 Save</button>
+            <button type="button" onclick="document.getElementById('add-exp-modal').classList.remove('open')" class="btn btn-outline">لغو</button>
+            <button type="submit" class="btn btn-primary">💾 ذخیره</button>
           </div>
         </form>
       </div>
@@ -263,22 +263,22 @@ expenses.get('/', async (c) => {
     <div class="modal-overlay" id="edit-exp-modal">
       <div class="modal" style="max-width:480px">
         <div class="modal-header">
-          <div class="modal-title">✏️ Edit Expense</div>
+          <div class="modal-title">✏️ ویرایش مصرف</div>
           <button onclick="document.getElementById('edit-exp-modal').classList.remove('open')" class="modal-close">✕</button>
         </div>
         <form method="POST" id="edit-exp-form" action="/expenses/0">
           <div class="form-row">
             <div class="form-group">
-              <label>Category *</label>
+              <label>دسته‌بندی *</label>
               <select name="category" id="edit-exp-cat" required>${catOpts}</select>
             </div>
             <div class="form-group">
-              <label>Date *</label>
+              <label>تاریخ *</label>
               <input type="date" name="expense_date" id="edit-exp-date" required/>
             </div>
           </div>
           <div class="form-group">
-            <label>Title *</label>
+            <label>عنوان *</label>
             <input type="text" name="title" id="edit-exp-title" required/>
           </div>
           <div class="form-group">
@@ -286,12 +286,12 @@ expenses.get('/', async (c) => {
             <input type="number" name="amount" id="edit-exp-amount" min="1" step="0.01" required/>
           </div>
           <div class="form-group">
-            <label>Notes</label>
+            <label>یادداشت</label>
             <textarea name="notes" id="edit-exp-notes" rows="2"></textarea>
           </div>
           <div class="modal-footer" style="border:none;padding:0;margin-top:1rem">
-            <button type="button" onclick="document.getElementById('edit-exp-modal').classList.remove('open')" class="btn btn-outline">Cancel</button>
-            <button type="submit" class="btn btn-primary">💾 Save Changes</button>
+            <button type="button" onclick="document.getElementById('edit-exp-modal').classList.remove('open')" class="btn btn-outline">لغو</button>
+            <button type="submit" class="btn btn-primary">💾 ذخیره تغییرات</button>
           </div>
         </form>
       </div>

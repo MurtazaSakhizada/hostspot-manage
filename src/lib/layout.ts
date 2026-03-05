@@ -42,9 +42,10 @@ export function pageShell(opts: {
     <a href="/expenses" class="nav-link ${activePage === 'expenses' ? 'active' : ''}">
       <i class="icon-minus">💸</i><span>${lang === 'fa' ? 'مصارف' : lang === 'ps' ? 'لګښتونه' : 'Expenses'}</span>
     </a>
+    ${isOwner ? `
     <a href="/notifications" class="nav-link ${activePage === 'notifications' ? 'active' : ''}" style="position:relative">
       <i class="icon-bell">🔔</i><span>${lang === 'fa' ? 'اعلانات' : lang === 'ps' ? 'خبرتیاوې' : 'Notifications'}</span>
-    </a>
+    </a>` : ''}
     <a href="/settings" class="nav-link ${activePage === 'settings' ? 'active' : ''}">
       <i class="icon-gear">⚙️</i><span>${t(lang, 'settings')}</span>
     </a>
@@ -114,8 +115,8 @@ ${user ? `
       <button class="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
       <div class="topbar-right">
         <div class="lang-switcher-mobile">${langSwitcher}</div>
-        <!-- Notification Bell -->
-        <div class="notif-bell-wrap" id="notif-bell-wrap">
+        <!-- Notification Bell (owners only) -->
+        ${isOwner ? `<div class="notif-bell-wrap" id="notif-bell-wrap">
           <button class="notif-bell-btn" onclick="toggleNotifDropdown()" title="Notifications">
             🔔
             <span class="notif-badge" id="notif-badge" style="display:none">0</span>
@@ -134,7 +135,7 @@ ${user ? `
               <a href="/notifications" style="font-size:.78rem;color:var(--primary)">All notifications →</a>
             </div>
           </div>
-        </div>
+        </div>` : ''}
       </div>
     </div>
     <div class="page-content">
