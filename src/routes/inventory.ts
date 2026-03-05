@@ -14,17 +14,141 @@ type Variables = { user: SessionUser; lang: Lang };
 const inventory = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // ============================================================
-// Main page: Tabs — Batch History | Legacy records
+// Main page: Owner sees full stock batches; Seller sees own allocations
 // ============================================================
 inventory.get('/', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
 
-  // Sellers have no access to company stock — redirect to their allocations
+  // ── SELLER VIEW: shows their own allocated stock ──────────
   if (user.role !== 'owner') {
-    return new Response(null, { status: 302, headers: { 'Location': '/allocations' } });
+    const [allocBatches, allocTotals, soldTotals] = await Promise.all([
+      c.env.DB.prepare(`
+        SELECT ab.*, br.name as branch_name,
+          (SELECT COUNT(*) FROM allocation_batch_lines WHERE batch_id=ab.id) as line_count
+        FROM allocation_batches ab
+        JOIN branches br ON br.id = ab.branch_id
+        WHERE ab.company_id=? AND ab.seller_id=?
+        ORDER BY ab.created_at DESC`).bind(user.company_id, user.id).all<any>(),
+
+      c.env.DB.prepare(`
+        SELECT COALESCE(SUM(total_gb),0) as gb,
+               COALESCE(SUM(total_gross),0) as gross,
+               COUNT(*) as batches
+        FROM allocation_batches WHERE company_id=? AND seller_id=?`)
+        .bind(user.company_id, user.id).first<any>(),
+
+      c.env.DB.prepare(`
+        SELECT COALESCE(SUM(total_gb),0) as sold_gb
+        FROM sales WHERE company_id=? AND seller_id=?`)
+        .bind(user.company_id, user.id).first<any>(),
+    ]);
+
+    const allocatedGb = allocTotals?.gb ?? 0;
+    const soldGb      = soldTotals?.sold_gb ?? 0;
+    const remainingGb = Math.max(0, allocatedGb - soldGb);
+
+    const allocRows = await Promise.all((allocBatches.results || []).map(async (ab: any, i: number) => {
+      const lines = await c.env.DB.prepare(`
+        SELECT abl.*, p.name as pkg_name
+        FROM allocation_batch_lines abl
+        JOIN packages p ON p.id = abl.package_id
+        WHERE abl.batch_id=?`).bind(ab.id).all<any>();
+
+      const lineRows = (lines.results || []).map((l: any) => `
+        <div style="display:flex;gap:1rem;align-items:center;padding:.35rem 0;border-bottom:1px solid var(--border)">
+          <span class="badge badge-primary" style="min-width:80px;text-align:center">${l.pkg_name}</span>
+          <span>${l.quantity} × ${l.size_gb}GB</span>
+          <span class="text-primary font-bold">= ${formatGB(l.total_gb)}</span>
+          <span style="margin-left:auto" class="text-warning">${formatMoney(l.commission_amount)} ${lang==='fa'?'کمیسیون':lang==='ps'?'کمیشن':'comm.'}</span>
+        </div>`).join('');
+
+      return `
+      <tr>
+        <td>
+          <div class="font-bold">${new Date(ab.created_at).toLocaleDateString('en-GB')}</div>
+          <div style="font-size:.75rem;color:var(--text-muted)">${new Date(ab.created_at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div>
+        </td>
+        <td><strong>${ab.branch_name}</strong></td>
+        <td><span class="badge badge-info">${ab.line_count} ${lang==='fa'?'نوع پکیج':lang==='ps'?'ډول پکیج':'pkg type'}${ab.line_count>1&&lang==='en'?'s':''}</span></td>
+        <td class="text-primary font-bold">${formatGB(ab.total_gb)}</td>
+        <td class="text-warning font-bold">${Math.round(ab.commission_rate * 100)}%</td>
+        <td style="max-width:200px;color:var(--text-muted);font-size:.82rem">${ab.notes||'—'}</td>
+        <td>
+          <button onclick="toggleRow('alloc-inv-${i}')" class="btn btn-outline btn-sm">📋 ${lang==='fa'?'جزئیات':lang==='ps'?'توضیحات':'Details'}</button>
+        </td>
+      </tr>
+      <tr id="alloc-inv-${i}" class="hidden">
+        <td colspan="7" style="background:var(--gray-50);padding:.875rem 1rem">
+          <div style="font-size:.82rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">📦 ${lang==='fa'?'جزئیات پکیج‌ها':lang==='ps'?'د پکیج توضیحات':'Package Breakdown'}</div>
+          ${lineRows || `<div style="color:var(--text-muted)">${t(lang,'no_data')}</div>`}
+          ${ab.notes?`<div style="margin-top:.5rem;font-size:.82rem"><strong>${t(lang,'notes')}:</strong> ${ab.notes}</div>`:''}
+        </td>
+      </tr>`;
+    }));
+
+    const emptyRow = `<tr><td colspan="7"><div class="empty-state">
+      <div class="empty-state-icon">📦</div>
+      <h3>${t(lang,'no_data')}</h3>
+      <p>${lang==='fa'?'هنوز موجودی تخصیص‌یافته‌ای ندارید.':lang==='ps'?'تاسو لا هیڅ تخصیص شوی موجودي نه لرئ.':'No allocated stock yet.'}</p>
+    </div></td></tr>`;
+
+    return c.html(pageShell({
+      title: t(lang, 'inventory'), lang, user, activePage: 'inventory',
+      body: `
+      <div class="page-header">
+        <div>
+          <div class="page-title">📦 ${t(lang,'inventory')}</div>
+          <div class="page-subtitle">${lang==='fa'?'موجودی تخصیص‌یافته به شما':lang==='ps'?'ستاسو تخصیص شوې موجودي':'Your Allocated Stock'}</div>
+        </div>
+        <a href="/sales/add" class="btn btn-primary">+ ${t(lang,'add_sale')}</a>
+      </div>
+
+      <!-- KPI Cards -->
+      <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:1.25rem">
+        <div class="stat-card">
+          <div class="stat-card-accent" style="background:#7c3aed"></div>
+          <div class="stat-label">📦 ${lang==='fa'?'مجموع تخصیص‌یافته':lang==='ps'?'ټولټال تخصیص شوي':t(lang,'total_allocated')}</div>
+          <div class="stat-value" style="color:#7c3aed">${formatGB(allocatedGb)}</div>
+          <div class="stat-sub">${allocTotals?.batches ?? 0} ${lang==='fa'?'دسته':lang==='ps'?'ډله':'batches'}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-accent" style="background:var(--success)"></div>
+          <div class="stat-label">📤 ${lang==='fa'?'فروخته‌شده':lang==='ps'?'پلورل شوي':t(lang,'total_sold')}</div>
+          <div class="stat-value success">${formatGB(soldGb)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-accent" style="background:var(--primary)"></div>
+          <div class="stat-label">🟢 ${lang==='fa'?'موجود برای فروش':lang==='ps'?'د پلور لپاره موجود':t(lang,'available_gb')}</div>
+          <div class="stat-value primary">${formatGB(remainingGb)}</div>
+        </div>
+      </div>
+
+      <!-- Allocation Batches Table -->
+      <div class="card">
+        <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;padding:.875rem 1rem;border-bottom:1px solid var(--border)">
+          <div style="font-weight:600;font-size:.95rem">📋 ${lang==='fa'?'تاریخچه تخصیص‌ها':lang==='ps'?'د تخصیصاتو تاریخچه':'Allocation History'}</div>
+          <div style="font-size:.8rem;color:var(--text-muted)">${lang==='fa'?'هر ردیف = یک دسته تخصیص':lang==='ps'?'هر کتار = یو تخصیص ډله':'Each row = one allocation batch'}</div>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr>
+              <th>${t(lang,'date')}</th>
+              <th>${t(lang,'branch')}</th>
+              <th>${lang==='fa'?'پکیج‌ها':lang==='ps'?'پکیجونه':'Packages'}</th>
+              <th>${t(lang,'total_gb')}</th>
+              <th>${t(lang,'commission_rate')}</th>
+              <th>${t(lang,'notes')}</th>
+              <th>${t(lang,'actions')}</th>
+            </tr></thead>
+            <tbody>${allocRows.join('') || emptyRow}</tbody>
+          </table>
+        </div>
+      </div>`
+    }));
   }
 
+  // ── OWNER VIEW: full company stock batches ─────────────────
   const tab = new URL(c.req.url).searchParams.get('tab') ?? 'history';
 
   // ---- Batch history ----
@@ -70,15 +194,15 @@ inventory.get('/', async (c) => {
         <span class="badge badge-primary">${b.line_count} package type${b.line_count>1?'s':''}</span>
       </td>
       <td class="text-primary font-bold">${formatGB(b.total_gb)}</td>
-      ${user.role==='owner'?`<td class="text-success font-bold">${formatMoney(b.total_gross)}</td>`:''}
+      <td class="text-success font-bold">${formatMoney(b.total_gross)}</td>
       <td style="max-width:200px;color:var(--text-muted);font-size:.82rem">${b.notes||'—'}</td>
       <td>
         <button onclick="toggleRow('inv-batch-${i}')" class="btn btn-outline btn-sm">📋 Details</button>
-        ${user.role==='owner'?`<button onclick="confirmDelete('/api/inventory-batch/${b.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>`:''}
+        <button onclick="confirmDelete('/api/inventory-batch/${b.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>
       </td>
     </tr>
     <tr id="inv-batch-${i}" class="hidden">
-      <td colspan="${user.role==='owner'?7:6}" style="background:var(--gray-50);padding:.875rem 1rem">
+      <td colspan="7" style="background:var(--gray-50);padding:.875rem 1rem">
         <div style="font-size:.82rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">📦 Package Breakdown</div>
         ${lineRows || '<div style="color:var(--text-muted)">No lines</div>'}
         ${b.notes?`<div style="margin-top:.5rem;font-size:.82rem"><strong>Note:</strong> ${b.notes}</div>`:''}
@@ -87,7 +211,7 @@ inventory.get('/', async (c) => {
   }));
 
   const batchTableBody = batchRows.join('') || `
-    <tr><td colspan="${user.role==='owner'?7:6}">
+    <tr><td colspan="7">
       <div class="empty-state">
         <div class="empty-state-icon">📦</div>
         <h3>${t(lang,'no_data')}</h3>
@@ -103,7 +227,7 @@ inventory.get('/', async (c) => {
         <div class="page-title">📦 ${t(lang,'inventory')}</div>
         <div class="page-subtitle">Stock-in history &amp; records</div>
       </div>
-      ${user.role==='owner'?`<a href="/inventory/add" class="btn btn-primary">+ Add Stock (Batch)</a>`:''}
+      <a href="/inventory/add" class="btn btn-primary">+ Add Stock (Batch)</a>
     </div>
 
     <!-- Summary Stats -->
@@ -112,7 +236,6 @@ inventory.get('/', async (c) => {
         <div class="stat-label">Total GB In Stock</div>
         <div class="stat-value primary">${formatGB(totals?.gb ?? 0)}</div>
       </div>
-      ${user.role==='owner'?`
       <div class="stat-card">
         <div class="stat-label">Total Value</div>
         <div class="stat-value success">${formatMoney(totals?.gross ?? 0)}</div>
@@ -120,7 +243,7 @@ inventory.get('/', async (c) => {
       <div class="stat-card">
         <div class="stat-label">Total Entries</div>
         <div class="stat-value">${batches.results?.length ?? 0}</div>
-      </div>`:''}
+      </div>
     </div>
 
     <!-- Batch History Table -->
@@ -136,7 +259,7 @@ inventory.get('/', async (c) => {
             <th>${t(lang,'branch')}</th>
             <th>Packages</th>
             <th>Total GB</th>
-            ${user.role==='owner'?`<th>Total Value</th>`:''}
+            <th>Total Value</th>
             <th>Notes</th>
             <th>${t(lang,'actions')}</th>
           </tr></thead>

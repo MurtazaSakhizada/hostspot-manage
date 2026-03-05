@@ -19,10 +19,9 @@ reports.get('/', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
 
-  // Reports are owner-only
-  if (user.role !== 'owner') {
-    return new Response(null, { status: 302, headers: { 'Location': '/dashboard' } });
-  }
+  const isOwner = user.role === 'owner';
+  // Seller filter: sellers only see their own sales data
+  const sellerFilter = !isOwner ? ` AND seller_id = ${user.id}` : '';
 
   const groupBy = c.req.query('group') ?? 'date';
   const from = c.req.query('from') ?? '';
@@ -37,7 +36,7 @@ reports.get('/', async (c) => {
     SELECT COALESCE(SUM(total_gb),0) as gb, COALESCE(SUM(gross_amount),0) as gross,
            COALESCE(SUM(commission_amount),0) as comm, COALESCE(SUM(net_amount),0) as net,
            COUNT(*) as cnt
-    FROM sales WHERE company_id=? ${dateFilter}`).bind(user.company_id).first<any>();
+    FROM sales WHERE company_id=? ${sellerFilter} ${dateFilter}`).bind(user.company_id).first<any>();
 
   const invSummary = await c.env.DB.prepare(`
     SELECT COALESCE(SUM(total_gb),0) as gb, COALESCE(SUM(total_gross),0) as gross, COUNT(*) as batches
@@ -56,7 +55,7 @@ reports.get('/', async (c) => {
     SELECT strftime('%Y-%m-%d', snapshot_time) as period,
       COALESCE(SUM(total_gb),0) as gb, COALESCE(SUM(gross_amount),0) as gross,
       COALESCE(SUM(commission_amount),0) as comm, COALESCE(SUM(net_amount),0) as net, COUNT(*) as cnt
-    FROM sales WHERE company_id=? ${dateFilter}
+    FROM sales WHERE company_id=? ${sellerFilter} ${dateFilter}
     GROUP BY period ORDER BY period DESC LIMIT 30`).bind(user.company_id).all<any>();
 
   // ── By Branch ─────────────────────────────────────────────
@@ -66,6 +65,7 @@ reports.get('/', async (c) => {
       COALESCE(SUM(s.commission_amount),0) as comm, COALESCE(SUM(s.net_amount),0) as net, COUNT(s.id) as cnt
     FROM branches b LEFT JOIN sales s ON s.branch_id=b.id AND s.company_id=b.company_id
       ${dateFilter.replace('snapshot_time','s.snapshot_time')}
+      ${!isOwner ? `AND s.seller_id = ${user.id}` : ''}
     WHERE b.company_id=?
     GROUP BY b.id, b.name ORDER BY gb DESC`).bind(user.company_id).all<any>();
 
@@ -90,6 +90,7 @@ reports.get('/', async (c) => {
       COALESCE(SUM(s.net_amount),0) as net
     FROM packages p LEFT JOIN sales s ON s.package_id=p.id AND s.company_id=p.company_id
       ${dateFilter.replace('snapshot_time','s.snapshot_time')}
+      ${!isOwner ? `AND s.seller_id = ${user.id}` : ''}
     WHERE p.company_id=?
     GROUP BY p.id ORDER BY cnt DESC`).bind(user.company_id).all<any>();
 
@@ -97,7 +98,7 @@ reports.get('/', async (c) => {
   const chart14 = await c.env.DB.prepare(`
     SELECT strftime('%Y-%m-%d', snapshot_time) as day,
       COALESCE(SUM(gross_amount),0) as rev, COUNT(*) as cnt
-    FROM sales WHERE company_id=? AND snapshot_time >= datetime('now','-14 days')
+    FROM sales WHERE company_id=? ${sellerFilter} AND snapshot_time >= datetime('now','-14 days')
       ${dateFilter}
     GROUP BY day ORDER BY day ASC`).bind(user.company_id).all<any>();
 
@@ -111,7 +112,7 @@ reports.get('/', async (c) => {
   const chartRev = JSON.stringify(days14.map(d=>Math.round(chartMap[d]?.rev??0)));
   const chartCnt = JSON.stringify(days14.map(d=>chartMap[d]?.cnt??0));
 
-  const isOwner = user.role === 'owner';
+  // isOwner already declared above
   const activeData = groupBy==='branch' ? byBranch.results
     : groupBy==='seller' ? bySeller.results
     : groupBy==='package' ? byPackage.results
@@ -371,7 +372,8 @@ function getMonthStart() { const d = new Date(); d.setDate(1); return d.toISOStr
 reports.get('/pdf', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
-  if (user.role !== 'owner') return new Response(null, { status: 302, headers: { 'Location': '/dashboard' } });
+  const pdfIsOwner = user.role === 'owner';
+  const pdfSellerFilter = !pdfIsOwner ? ` AND seller_id = ${user.id}` : '';
   const from = c.req.query('from') ?? '';
   const to   = c.req.query('to')   ?? '';
 
@@ -392,7 +394,7 @@ reports.get('/pdf', async (c) => {
       SELECT COALESCE(SUM(total_gb),0) as gb, COALESCE(SUM(gross_amount),0) as gross,
              COALESCE(SUM(commission_amount),0) as comm, COALESCE(SUM(net_amount),0) as net,
              COUNT(*) as cnt
-      FROM sales WHERE company_id=? ${dateFilter}`)
+      FROM sales WHERE company_id=? ${pdfSellerFilter} ${dateFilter}`)
       .bind(user.company_id).first<any>(),
     // By Date
     c.env.DB.prepare(`
@@ -400,7 +402,7 @@ reports.get('/pdf', async (c) => {
              COALESCE(SUM(total_gb),0) as gb, COALESCE(SUM(gross_amount),0) as gross,
              COALESCE(SUM(commission_amount),0) as comm, COALESCE(SUM(net_amount),0) as net,
              COUNT(*) as cnt
-      FROM sales WHERE company_id=? ${dateFilter}
+      FROM sales WHERE company_id=? ${pdfSellerFilter} ${dateFilter}
       GROUP BY period ORDER BY period DESC LIMIT 60`)
       .bind(user.company_id).all<any>(),
     // By Branch
@@ -411,6 +413,7 @@ reports.get('/pdf', async (c) => {
       FROM branches b LEFT JOIN sales s
         ON s.branch_id=b.id AND s.company_id=b.company_id
         ${dateFilter.replace('snapshot_time','s.snapshot_time')}
+        ${!pdfIsOwner ? `AND s.seller_id = ${user.id}` : ''}
       WHERE b.company_id=? GROUP BY b.id ORDER BY gb DESC`)
       .bind(user.company_id).all<any>(),
     // By Seller (owner only)
@@ -462,12 +465,12 @@ reports.get('/pdf', async (c) => {
       JOIN users u ON u.id=s.seller_id
       JOIN branches b ON b.id=s.branch_id
       JOIN packages p ON p.id=s.package_id
-      WHERE s.company_id=? ${dateFilter.replace('snapshot_time','s.snapshot_time')}
+      WHERE s.company_id=? ${pdfSellerFilter} ${dateFilter.replace('snapshot_time','s.snapshot_time')}
       ORDER BY s.snapshot_time DESC LIMIT 50`)
       .bind(user.company_id).all<any>(),
   ]);
 
-  const isOwner = user.role === 'owner';
+  const isOwner = pdfIsOwner;
   const dateLabel = from||to ? `${from||'Start'} → ${to||'Today'}` : 'All Time';
   const now = new Date().toLocaleDateString('en-GB', {
     day:'2-digit', month:'long', year:'numeric',
@@ -757,7 +760,7 @@ reports.get('/pdf', async (c) => {
 // ============================================================
 reports.get('/csv', async (c) => {
   const user = c.get('user');
-  if (user.role !== 'owner') return new Response(null, { status: 302, headers: { 'Location': '/dashboard' } });
+  const csvSellerFilter = user.role !== 'owner' ? ` AND s.seller_id = ${user.id}` : '';
   const from = c.req.query('from') ?? '';
   const to = c.req.query('to') ?? '';
   let dateFilter = '';
@@ -771,7 +774,7 @@ reports.get('/csv', async (c) => {
     JOIN users u ON u.id=s.seller_id
     JOIN branches b ON b.id=s.branch_id
     JOIN packages p ON p.id=s.package_id
-    WHERE s.company_id=? ${dateFilter}
+    WHERE s.company_id=? ${csvSellerFilter} ${dateFilter}
     ORDER BY s.snapshot_time DESC`).bind(user.company_id).all<any>();
 
   const header = 'Date,Seller,Branch,Package,Quantity,Total GB,Gross Amount,Commission Rate,Commission,Net Amount,Notes\n';

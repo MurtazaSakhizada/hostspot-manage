@@ -37,7 +37,7 @@ function catColor(k: string) {
 expenses.get('/', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
-  if (user.role !== 'owner') return c.redirect('/dashboard');
+  const isOwner = user.role === 'owner';
 
   const from = c.req.query('from') ?? '';
   const to   = c.req.query('to')   ?? '';
@@ -45,6 +45,8 @@ expenses.get('/', async (c) => {
 
   let where = 'WHERE e.company_id=?';
   const binds: any[] = [user.company_id];
+  // Seller sees only expenses they created
+  if (!isOwner) { where += ` AND e.created_by = ${user.id}`; }
   if (from) { where += ` AND e.expense_date >= ?`; binds.push(from); }
   if (to)   { where += ` AND e.expense_date <= ?`; binds.push(to); }
   if (cat !== 'all') { where += ` AND e.category = ?`; binds.push(cat); }
@@ -56,9 +58,10 @@ expenses.get('/', async (c) => {
   const items = await stmt.bind(...binds).all<any>();
 
   // Totals by category (all time in filter)
+  const totalsCreatorFilter = !isOwner ? ` AND created_by = ${user.id}` : '';
   const totals = await c.env.DB.prepare(
     `SELECT category, COALESCE(SUM(amount),0) as total, COUNT(*) as cnt
-     FROM expenses WHERE company_id=? GROUP BY category ORDER BY total DESC`)
+     FROM expenses WHERE company_id=? ${totalsCreatorFilter} GROUP BY category ORDER BY total DESC`)
     .bind(user.company_id).all<any>();
   const grandTotal = (totals.results||[]).reduce((s:number,r:any)=>s+r.total, 0);
 
@@ -311,7 +314,6 @@ expenses.get('/', async (c) => {
 // ── POST /expenses ────────────────────────────────────────────
 expenses.post('/', async (c) => {
   const user = c.get('user');
-  if (user.role !== 'owner') return c.redirect('/dashboard');
   const form = await c.req.formData();
   const category     = form.get('category')?.toString() ?? 'general';
   const title        = form.get('title')?.toString().trim() ?? '';
@@ -332,7 +334,6 @@ expenses.post('/', async (c) => {
 // ── POST /expenses/:id (edit) ─────────────────────────────────
 expenses.post('/:id', async (c) => {
   const user = c.get('user');
-  if (user.role !== 'owner') return c.redirect('/dashboard');
   const id = c.req.param('id');
   const form = await c.req.formData();
   const category     = form.get('category')?.toString() ?? 'general';
@@ -341,9 +342,11 @@ expenses.post('/:id', async (c) => {
   const expense_date = form.get('expense_date')?.toString() ?? '';
   const notes        = form.get('notes')?.toString() ?? '';
 
+  // Sellers can only edit their own expenses
+  const editFilter = user.role !== 'owner' ? ` AND created_by = ${user.id}` : '';
   await c.env.DB.prepare(`
     UPDATE expenses SET category=?,title=?,amount=?,expense_date=?,notes=?
-    WHERE id=? AND company_id=?`)
+    WHERE id=? AND company_id=? ${editFilter}`)
     .bind(category, title, amount, expense_date, notes||null, id, user.company_id).run();
   return new Response(null, { status: 302, headers: { 'Location': '/expenses' } });
 });
@@ -351,9 +354,10 @@ expenses.post('/:id', async (c) => {
 // ── DELETE /api/expenses/:id ──────────────────────────────────
 expenses.delete('/api/expenses/:id', async (c) => {
   const user = c.get('user');
-  if (user.role !== 'owner') return c.json({error:'Forbidden'}, 403);
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM expenses WHERE id=? AND company_id=?')
+  // Sellers can only delete their own expenses; owners can delete any
+  const deleteFilter = user.role !== 'owner' ? ` AND created_by = ${user.id}` : '';
+  await c.env.DB.prepare(`DELETE FROM expenses WHERE id=? AND company_id=? ${deleteFilter}`)
     .bind(id, user.company_id).run();
   return c.json({ success: true });
 });

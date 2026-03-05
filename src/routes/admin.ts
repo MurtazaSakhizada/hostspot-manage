@@ -543,7 +543,47 @@ admin.delete('/api/users/:id', async (c) => {
 admin.get('/settings', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
-  if (user.role !== 'owner') return c.redirect('/dashboard');
+
+  // Sellers see a personal settings page (change password only)
+  if (user.role !== 'owner') {
+    const ok  = c.req.query('ok');
+    const err = c.req.query('err');
+    const msgHtml = ok  ? `<div class="alert alert-success">✅ ${lang==='fa'?'رمز عبور با موفقیت تغییر یافت.':lang==='ps'?'پټ نوم بریالیتوب سره بدل شو.':'Password changed successfully.'}</div>`
+      : err ? `<div class="alert alert-error">❌ ${lang==='fa'?'رمز عبور فعلی نادرست است.':lang==='ps'?'اوسنی پټ نوم غلط دی.':'Current password is incorrect.'}</div>` : '';
+    return c.html(pageShell({
+      title: lang==='fa'?'تنظیمات':lang==='ps'?'ترتیبات':'Settings', lang, user, activePage: 'settings',
+      body: `
+      <div class="page-header">
+        <div>
+          <div class="page-title">⚙️ ${lang==='fa'?'تنظیمات شخصی':lang==='ps'?'شخصي ترتیبات':'Personal Settings'}</div>
+          <div class="page-subtitle">${user.full_name}</div>
+        </div>
+      </div>
+      ${msgHtml}
+      <div class="card" style="max-width:480px">
+        <div class="card-header">
+          <div class="card-title">🔒 ${lang==='fa'?'تغییر رمز عبور':lang==='ps'?'پټ نوم بدلول':'Change Password'}</div>
+        </div>
+        <div style="padding:1.25rem">
+          <form method="POST" action="/settings/change-password">
+            <div class="form-group">
+              <label>${lang==='fa'?'رمز عبور فعلی':lang==='ps'?'اوسنی پټ نوم':'Current Password'}</label>
+              <input type="password" name="current_password" required/>
+            </div>
+            <div class="form-group">
+              <label>${lang==='fa'?'رمز عبور جدید':lang==='ps'?'نوی پټ نوم':'New Password'}</label>
+              <input type="password" name="new_password" required minlength="6"/>
+            </div>
+            <div class="form-group">
+              <label>${lang==='fa'?'تأیید رمز عبور جدید':lang==='ps'?'نوی پټ نوم تایید':'Confirm New Password'}</label>
+              <input type="password" name="confirm_password" required minlength="6"/>
+            </div>
+            <button type="submit" class="btn btn-primary">💾 ${lang==='fa'?'ذخیره':lang==='ps'?'خوندي کول':'Save'}</button>
+          </form>
+        </div>
+      </div>`
+    }));
+  }
 
   const company = await c.env.DB.prepare('SELECT * FROM companies WHERE id=?')
     .bind(user.company_id).first<any>();
@@ -627,6 +667,40 @@ admin.get('/settings', async (c) => {
       </div>
     </div>`
   }));
+});
+
+// ── POST /settings/change-password  (seller personal password change) ──
+admin.post('/settings/change-password', async (c) => {
+  const user = c.get('user');
+  const form = await c.req.formData();
+  const currentPw  = form.get('current_password')?.toString() ?? '';
+  const newPw      = form.get('new_password')?.toString() ?? '';
+  const confirmPw  = form.get('confirm_password')?.toString() ?? '';
+
+  if (!newPw || newPw !== confirmPw || newPw.length < 6) {
+    return new Response(null, { status: 302, headers: { 'Location': '/settings?err=mismatch' } });
+  }
+
+  // Verify current password
+  const crypto = globalThis.crypto;
+  const encoder = new TextEncoder();
+  const currentHash = Array.from(new Uint8Array(
+    await crypto.subtle.digest('SHA-256', encoder.encode(currentPw))
+  )).map(b=>b.toString(16).padStart(2,'0')).join('');
+
+  const dbUser = await c.env.DB.prepare('SELECT password_hash FROM users WHERE id=?')
+    .bind(user.id).first<{password_hash:string}>();
+  if (!dbUser || dbUser.password_hash !== currentHash) {
+    return new Response(null, { status: 302, headers: { 'Location': '/settings?err=wrong' } });
+  }
+
+  const newHash = Array.from(new Uint8Array(
+    await crypto.subtle.digest('SHA-256', encoder.encode(newPw))
+  )).map(b=>b.toString(16).padStart(2,'0')).join('');
+
+  await c.env.DB.prepare('UPDATE users SET password_hash=? WHERE id=?')
+    .bind(newHash, user.id).run();
+  return new Response(null, { status: 302, headers: { 'Location': '/settings?ok=1' } });
 });
 
 admin.post('/settings/purchase-price', async (c) => {
