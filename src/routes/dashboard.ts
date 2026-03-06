@@ -56,7 +56,7 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
     WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0)`)
     .bind(user.company_id).first<{total:number}>();
 
-  // ── Payments (paid to sellers) ───────────────────────────
+  // ── Payments (received FROM sellers by owner) ──────────────
   const payTotal = await db.prepare(`
     SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE company_id=?`)
     .bind(user.company_id).first<{total:number}>();
@@ -281,6 +281,13 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
       <div class="stat-value" style="color:var(--danger)">${formatMoney(soldPurchaseCost)}</div>
       ${purchasePriceNote}
     </div>
+    <!-- Total Received FROM Sellers (دریافتی از فروشندگان) -->
+    <div class="stat-card">
+      <div class="stat-card-accent" style="background:#0891b2"></div>
+      <div class="stat-label">💰 مجموع دریافتی</div>
+      <div class="stat-value" style="color:#0891b2">${formatMoney(payTotal?.total ?? 0)}</div>
+      <div class="stat-sub">دریافت شده از فروشندگان</div>
+    </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--success)"></div>
       <div class="stat-label">سود خالص</div>
@@ -362,7 +369,7 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
           <th>مجموع فروش</th>
           <th>کمیشن</th>
           <th>ارزش تخصیص</th>
-          <th>پرداخت شده</th>
+          <th>دریافتی از فروشنده</th>
           <th>تعداد</th>
           <th>مانده بدهی</th>
         </tr></thead>

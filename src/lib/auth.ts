@@ -49,7 +49,10 @@ export async function getSessionUser(db: D1Database, sessionId: string | undefin
     SELECT u.id, u.company_id, u.username, u.full_name, u.role, u.commission_rate, u.language
     FROM sessions s
     JOIN users u ON u.id = s.user_id
-    WHERE s.id = ? AND s.expires_at > datetime('now') AND u.active = 1
+    JOIN companies c ON c.id = u.company_id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+      AND u.active = 1
+      AND COALESCE(c.active, 1) = 1
   `).bind(sessionId).first<SessionUser>();
   return row ?? null;
 }

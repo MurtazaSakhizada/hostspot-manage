@@ -918,6 +918,10 @@ sa.post('/sa/api/companies/:id/toggle', async (c) => {
     if (!co) return c.json({ success: false, error: 'Not found' }, 404);
     const newActive = co.active === 0 ? 1 : 0;
     await c.env.DB.prepare('UPDATE companies SET active=? WHERE id=?').bind(newActive, id).run();
+    // When deactivating: immediately kill ALL active sessions for this company
+    if (newActive === 0) {
+      await c.env.DB.prepare('DELETE FROM sessions WHERE company_id=?').bind(id).run();
+    }
     return c.json({ success: true, active: newActive });
   } catch (e: any) {
     return c.json({ success: false, error: e.message }, 500);

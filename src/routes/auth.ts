@@ -61,13 +61,18 @@ auth.post('/login', async (c) => {
 
   const hash = await hashPassword(password);
   const user = await c.env.DB.prepare(
-    `SELECT u.*, c.name as company_name FROM users u 
+    `SELECT u.*, c.name as company_name, COALESCE(c.active,1) as company_active FROM users u 
      JOIN companies c ON c.id = u.company_id 
      WHERE u.username = ? AND (u.password_hash = ? OR u.password_hash = ?) AND u.active = 1`
   ).bind(username, hash, password + '_hashed').first<any>();
 
   if (!user) {
     return c.html(loginPage(lang, 'Invalid username or password'), 401);
+  }
+
+  // Block login if company is deactivated by super admin
+  if (!user.company_active || user.company_active === 0) {
+    return c.html(loginPage(lang, lang === 'fa' ? 'حساب شرکت شما غیرفعال شده است. با مدیر سیستم تماس بگیرید.' : lang === 'ps' ? 'ستاسو شرکت غیر فعال شوی. د سیسټم مدیر سره اړیکه ونیسئ.' : 'Your company account has been deactivated. Contact the system administrator.'), 403);
   }
 
   const sessionId = await createSession(c.env.DB, user.id, user.company_id);
