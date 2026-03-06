@@ -28,12 +28,31 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // ---- Static Files ----
 app.use('/static/*', serveStatic({ root: './' }));
-// Favicon - serve inline SVG
-app.get('/favicon.ico', (c) => {
-  return new Response('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><text y="26" font-size="28">📶</text></svg>', {
-    headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=86400' }
-  });
+// Also serve files from public root
+app.get('/favicon.svg', (c) => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4338ca"/><stop offset="100%" style="stop-color:#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="wf" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff"/><stop offset="100%" style="stop-color:#c7d2fe"/>
+    </linearGradient>
+    <linearGradient id="coin" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#fde68a"/><stop offset="100%" style="stop-color:#f59e0b"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="url(#bg)"/>
+  <path d="M 4 14 Q 16 5 28 14" fill="none" stroke="url(#wf)" stroke-width="2.5" stroke-linecap="round" opacity="0.95"/>
+  <path d="M 7.5 17.5 Q 16 10 24.5 17.5" fill="none" stroke="url(#wf)" stroke-width="2.5" stroke-linecap="round" opacity="0.8"/>
+  <path d="M 11 21 Q 16 15 21 21" fill="none" stroke="url(#wf)" stroke-width="2.5" stroke-linecap="round" opacity="0.65"/>
+  <circle cx="16" cy="24" r="2.2" fill="white" opacity="0.95"/>
+  <circle cx="25" cy="23" r="5.5" fill="url(#coin)"/>
+  <text x="25" y="26" text-anchor="middle" font-family="Arial" font-weight="900" font-size="7" fill="#78350f">&#xFB1;</text>
+</svg>`;
+  return new Response(svg, { headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=86400' } });
 });
+app.get('/favicon.ico', (c) => c.redirect('/favicon.svg', 301));
 
 // ---- Auth Middleware ----
 const PUBLIC_PATHS = ['/login', '/logout', '/api/language'];

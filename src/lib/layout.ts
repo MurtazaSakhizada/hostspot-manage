@@ -75,19 +75,26 @@ export function pageShell(opts: {
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>${title} — ${t(lang, 'app_name')}</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+  <link rel="shortcut icon" href="/favicon.svg"/>
+  <link rel="apple-touch-icon" href="/static/logo.svg"/>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css"/>
+  <link rel="stylesheet" href="/static/splash.css"/>
   ${extraHead}
 </head>
 <body class="${isRTL ? 'rtl' : 'ltr'}">
+<script src="/static/splash.js"></script>
 ${user ? `
 <div class="app-layout">
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <div class="logo">
-        <div class="logo-icon">📶</div>
+        <div class="logo-icon" style="display:flex;align-items:center;justify-content:center;width:36px;height:36px;background:linear-gradient(135deg,#4338ca,#7c3aed);border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(67,56,202,0.4)">
+          <img src="/static/logo.svg" alt="Logo" style="width:30px;height:30px;object-fit:contain" onerror="this.parentNode.innerHTML='📶'"/>
+        </div>
         <span class="logo-text">${t(lang, 'app_name')}</span>
       </div>
       <button class="sidebar-toggle" onclick="toggleSidebar()">☰</button>

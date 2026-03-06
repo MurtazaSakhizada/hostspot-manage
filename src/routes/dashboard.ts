@@ -49,9 +49,11 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
            COALESCE(SUM(gross_amount),0) as gross
     FROM allocations WHERE company_id=?`).bind(user.company_id).first<any>();
 
-  // ── Expenses ─────────────────────────────────────────────
+  // ── Expenses (COMPANY ONLY: seller_id IS NULL) ──────────────
+  // Seller personal expenses are EXCLUDED from owner profit/capital
   const expTotal = await db.prepare(`
-    SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE company_id=?`)
+    SELECT COALESCE(SUM(amount),0) as total FROM expenses
+    WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0)`)
     .bind(user.company_id).first<{total:number}>();
 
   // ── Payments (paid to sellers) ───────────────────────────
@@ -126,10 +128,10 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
     FROM sales WHERE company_id=?
     GROUP BY month ORDER BY month DESC LIMIT 6`).bind(user.company_id).all<any>();
 
-  // ── Recent expenses ──────────────────────────────────────
+  // ── Recent expenses (COMPANY ONLY: seller_id IS NULL) ──────
   const recentExp = await db.prepare(`
     SELECT category, title, amount, expense_date
-    FROM expenses WHERE company_id=?
+    FROM expenses WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0)
     ORDER BY expense_date DESC, created_at DESC LIMIT 5`)
     .bind(user.company_id).all<any>();
 
