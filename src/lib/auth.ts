@@ -54,7 +54,24 @@ export async function getSessionUser(db: D1Database, sessionId: string | undefin
       AND u.active = 1
       AND COALESCE(c.active, 1) = 1
   `).bind(sessionId).first<SessionUser>();
-  return row ?? null;
+  if (!row) return null;
+
+  // Block mid-session if subscription has expired
+  // Only enforced if the company has ever been assigned a subscription
+  const subCheck = await db.prepare(`
+    SELECT
+      COUNT(*) as total_subs,
+      MAX(CASE WHEN status='active' AND end_date >= date('now') THEN 1 ELSE 0 END) as has_active
+    FROM company_subscriptions
+    WHERE company_id = ?
+  `).bind(row.company_id).first<{total_subs:number; has_active:number}>();
+
+  if (subCheck && subCheck.total_subs > 0 && !subCheck.has_active) {
+    // Subscription existed but is now expired → treat as logged-out
+    return null;
+  }
+
+  return row;
 }
 
 export async function deleteSession(db: D1Database, sessionId: string): Promise<void> {

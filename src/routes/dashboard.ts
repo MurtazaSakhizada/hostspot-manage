@@ -273,7 +273,7 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
       <div class="stat-card-accent" style="background:var(--warning)"></div>
       <div class="stat-label">کمیشن‌ها</div>
       <div class="stat-value warning">${formatMoney(totalComm)}</div>
-      <div class="stat-sub">پرداخت به فروشندگان</div>
+      <div class="stat-sub">کسر از سود (کمیشن)</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--danger)"></div>

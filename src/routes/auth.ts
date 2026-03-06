@@ -75,6 +75,26 @@ auth.post('/login', async (c) => {
     return c.html(loginPage(lang, lang === 'fa' ? 'حساب شرکت شما غیرفعال شده است. با مدیر سیستم تماس بگیرید.' : lang === 'ps' ? 'ستاسو شرکت غیر فعال شوی. د سیسټم مدیر سره اړیکه ونیسئ.' : 'Your company account has been deactivated. Contact the system administrator.'), 403);
   }
 
+  // Block login if company subscription has expired
+  // Only check if the company has ever had a subscription
+  const subCheck = await c.env.DB.prepare(`
+    SELECT
+      COUNT(*) as total_subs,
+      MAX(CASE WHEN status='active' AND end_date >= date('now') THEN 1 ELSE 0 END) as has_active
+    FROM company_subscriptions
+    WHERE company_id = ?
+  `).bind(user.company_id).first<{total_subs:number; has_active:number}>();
+
+  if (subCheck && subCheck.total_subs > 0 && !subCheck.has_active) {
+    // Has had subscriptions before but none active now → expired
+    const msg = lang === 'fa'
+      ? 'اشتراک شرکت شما منقضی شده است. لطفاً با مدیر سیستم برای تمدید اشتراک تماس بگیرید.'
+      : lang === 'ps'
+      ? 'ستاسو د شرکت اشتراک پای ته رسیدلی. د تمدید لپاره د سیسټم مدیر سره اړیکه ونیسئ.'
+      : 'Your company subscription has expired. Please contact the system administrator to renew.';
+    return c.html(loginPage(lang, msg), 403);
+  }
+
   const sessionId = await createSession(c.env.DB, user.id, user.company_id);
   const userLang = user.language || 'en';
   
