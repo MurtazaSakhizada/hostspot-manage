@@ -3,6 +3,9 @@
 // /sa/login, /sa/logout, /sa/dashboard
 // /sa/companies, /sa/companies/add
 // /sa/companies/:id, /sa/companies/:id/edit
+// /sa/plans         - subscription plans CRUD
+// /sa/subscriptions - company subscriptions
+// /sa/revenue       - subscription revenue stats
 // /sa/admins, /sa/settings
 // ============================================
 import { Hono } from 'hono';
@@ -10,6 +13,7 @@ import {
   hashPassword, parseCookies,
   createSuperAdminSession, getSuperAdminSession, deleteSuperAdminSession
 } from '../lib/auth';
+import { handlePlansGet, handleSubscriptionsGet, handleRevenueGet } from '../lib/sa_subscriptions';
 
 type Bindings = { DB: D1Database };
 
@@ -158,10 +162,13 @@ ${scripts}
 
 function saNav(active: string, adminName: string): string {
   const links = [
-    { href: '/sa/dashboard', label: '🏠 Dashboard', key: 'dashboard' },
-    { href: '/sa/companies', label: '🏢 Companies', key: 'companies' },
-    { href: '/sa/admins', label: '🔑 Super Admins', key: 'admins' },
-    { href: '/sa/settings', label: '⚙️ Settings', key: 'settings' },
+    { href: '/sa/dashboard',     label: '🏠 داشبورد',       key: 'dashboard' },
+    { href: '/sa/companies',     label: '🏢 شرکت‌ها',       key: 'companies' },
+    { href: '/sa/plans',         label: '📦 پلن‌های اشتراک', key: 'plans' },
+    { href: '/sa/subscriptions', label: '🔖 اشتراک‌ها',     key: 'subscriptions' },
+    { href: '/sa/revenue',       label: '💰 درآمد',          key: 'revenue' },
+    { href: '/sa/admins',        label: '🔑 ادمین‌ها',       key: 'admins' },
+    { href: '/sa/settings',      label: '⚙️ تنظیمات',       key: 'settings' },
   ];
   const navHtml = links.map(l =>
     `<a href="${l.href}" class="sa-nav-link ${active === l.key ? 'active' : ''}">${l.label}</a>`
@@ -282,13 +289,20 @@ sa.get('/sa/dashboard', async (c) => {
   const url = new URL(c.req.url);
 
   // KPI counts
-  const [companiesRow, ownersRow, sellersRow, salesRow, allocRow, invRow] = await Promise.all([
+  const [companiesRow, ownersRow, sellersRow, salesRow, allocRow, invRow, subKpi] = await Promise.all([
     c.env.DB.prepare('SELECT COUNT(*) as n FROM companies').first<{n:number}>(),
     c.env.DB.prepare("SELECT COUNT(*) as n FROM users WHERE role='owner'").first<{n:number}>(),
     c.env.DB.prepare("SELECT COUNT(*) as n FROM users WHERE role='seller'").first<{n:number}>(),
     c.env.DB.prepare('SELECT COUNT(*) as n, COALESCE(SUM(gross_amount),0) as rev FROM sales').first<{n:number;rev:number}>(),
     c.env.DB.prepare('SELECT COALESCE(SUM(total_gb),0) as gb FROM allocation_batches').first<{gb:number}>(),
     c.env.DB.prepare('SELECT COALESCE(SUM(total_gb),0) as gb FROM inventory_batches').first<{gb:number}>(),
+    c.env.DB.prepare(`
+      SELECT
+        COALESCE(SUM(amount_paid),0) as total_revenue,
+        COALESCE(SUM(CASE WHEN strftime('%Y-%m',created_at)=strftime('%Y-%m','now') THEN amount_paid ELSE 0 END),0) as month_revenue,
+        COUNT(CASE WHEN status='active' AND end_date>=date('now') THEN 1 END) as active_subs,
+        COUNT(CASE WHEN end_date>=date('now') AND end_date<=date('now','+7 days') AND status='active' THEN 1 END) as expiring_soon
+      FROM company_subscriptions`).first<{total_revenue:number;month_revenue:number;active_subs:number;expiring_soon:number}>(),
   ]);
 
   // Last 7 days activity
@@ -442,6 +456,39 @@ sa.get('/sa/dashboard', async (c) => {
         </div>
       </div>
 
+      <!-- Subscription Revenue Banner -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:1.5rem;background:linear-gradient(135deg,#1e1035,#0f0a2a);border:1px solid #6d28d9;border-radius:12px;padding:1.25rem">
+        <div style="border-right:1px solid #2e1065;padding-right:1.25rem">
+          <div style="color:#a78bfa;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.35rem">💰 درآمد اشتراک (کل)</div>
+          <div style="color:#e9d5ff;font-size:1.5rem;font-weight:700">${fm(subKpi?.total_revenue??0)}</div>
+          <div style="color:#7c3aed;font-size:.72rem;margin-top:.2rem">از ابتدا تاکنون</div>
+        </div>
+        <div style="border-right:1px solid #2e1065;padding-right:1.25rem">
+          <div style="color:#a78bfa;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.35rem">🗓 درآمد این ماه</div>
+          <div style="color:#e9d5ff;font-size:1.5rem;font-weight:700">${fm(subKpi?.month_revenue??0)}</div>
+          <div style="color:#7c3aed;font-size:.72rem;margin-top:.2rem">ماه جاری</div>
+        </div>
+        <div style="border-right:1px solid #2e1065;padding-right:1.25rem">
+          <div style="color:#a78bfa;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.35rem">🔖 اشتراک‌های فعال</div>
+          <div style="color:#6ee7b7;font-size:1.5rem;font-weight:700">${subKpi?.active_subs??0}</div>
+          <div style="color:#7c3aed;font-size:.72rem;margin-top:.2rem">شرکت در حال اشتراک</div>
+        </div>
+        <div>
+          <div style="color:#a78bfa;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.35rem">⚠️ رو به انقضا</div>
+          <div style="color:${(subKpi?.expiring_soon??0) > 0 ? '#fcd34d' : '#6ee7b7'};font-size:1.5rem;font-weight:700">${subKpi?.expiring_soon??0}</div>
+          <div style="color:#7c3aed;font-size:.72rem;margin-top:.2rem">
+            ${(subKpi?.expiring_soon??0) > 0
+              ? `<a href="/sa/subscriptions" style="color:#fcd34d">مشاهده →</a>`
+              : 'اشتراک ۷ روز آینده'}
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:.5rem">
+          <a href="/sa/plans" class="sa-btn sa-btn-ghost sa-btn-sm">📦 پلن‌ها</a>
+          <a href="/sa/subscriptions" class="sa-btn sa-btn-ghost sa-btn-sm">🔖 اشتراک‌ها</a>
+          <a href="/sa/revenue" class="sa-btn sa-btn-primary sa-btn-sm">📊 گزارش →</a>
+        </div>
+      </div>
+
       <!-- Charts + Activity -->
       <div style="display:grid;grid-template-columns:1fr 320px;gap:1rem;margin-bottom:1.5rem">
         <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:1.25rem">
@@ -519,7 +566,10 @@ sa.get('/sa/companies', async (c) => {
       (SELECT COUNT(*) FROM branches WHERE company_id=c.id) as branch_count,
       (SELECT COUNT(*) FROM sales WHERE company_id=c.id) as sale_count,
       (SELECT COALESCE(SUM(gross_amount),0) FROM sales WHERE company_id=c.id) as revenue,
-      (SELECT COALESCE(SUM(total_gb),0) FROM inventory_batches WHERE company_id=c.id) as stock_gb
+      (SELECT COALESCE(SUM(total_gb),0) FROM inventory_batches WHERE company_id=c.id) as stock_gb,
+      (SELECT cs.end_date FROM company_subscriptions cs WHERE cs.company_id=c.id AND cs.status='active' ORDER BY cs.end_date DESC LIMIT 1) as sub_end,
+      (SELECT sp.name FROM company_subscriptions cs JOIN subscription_plans sp ON sp.id=cs.plan_id WHERE cs.company_id=c.id AND cs.status='active' ORDER BY cs.end_date DESC LIMIT 1) as sub_plan,
+      (SELECT sp.color FROM company_subscriptions cs JOIN subscription_plans sp ON sp.id=cs.plan_id WHERE cs.company_id=c.id AND cs.status='active' ORDER BY cs.end_date DESC LIMIT 1) as sub_color
     FROM companies c ORDER BY c.created_at DESC`).all<any>();
 
   const fm = (n: number) => '؋ ' + Math.round(n).toLocaleString();
@@ -527,6 +577,18 @@ sa.get('/sa/companies', async (c) => {
 
   const rows = (items.results||[]).map((co: any) => {
     const isActive = co.active !== 0;
+    // Subscription badge
+    let subBadge = '<span style="color:#475569;font-size:.72rem">—</span>';
+    if (co.sub_plan && co.sub_end) {
+      const daysLeft = Math.ceil((new Date(co.sub_end).getTime() - Date.now()) / 86400000);
+      if (daysLeft < 0) {
+        subBadge = `<span style="background:#7f1d1d;color:#fca5a5;padding:2px 6px;border-radius:99px;font-size:.68rem;font-weight:600">منقضی</span>`;
+      } else if (daysLeft <= 7) {
+        subBadge = `<span style="background:#451a03;color:#fcd34d;padding:2px 6px;border-radius:99px;font-size:.68rem;font-weight:600">⚠ ${daysLeft}d</span>`;
+      } else {
+        subBadge = `<div style="display:flex;align-items:center;gap:.25rem"><div style="width:7px;height:7px;border-radius:50%;background:${co.sub_color||'#4f46e5'}"></div><span style="color:#c7d2fe;font-size:.72rem">${co.sub_plan}</span><span style="color:#475569;font-size:.68rem">${daysLeft}d</span></div>`;
+      }
+    }
     return `
     <tr>
       <td>
@@ -542,6 +604,7 @@ sa.get('/sa/companies', async (c) => {
       <td style="color:#60a5fa;font-weight:600">${fgb(co.stock_gb)}</td>
       <td style="color:#94a3b8">${co.sale_count}</td>
       <td style="color:#4ade80;font-weight:600">${fm(co.revenue)}</td>
+      <td>${subBadge}</td>
       <td><span class="${isActive ? 'badge-active' : 'badge-inactive'}">${isActive ? 'Active' : 'Inactive'}</span></td>
       <td>
         <div style="display:flex;gap:.3rem;flex-wrap:nowrap">
@@ -573,10 +636,10 @@ sa.get('/sa/companies', async (c) => {
       <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;overflow:hidden">
         <table class="sa-table">
           <thead><tr>
-            <th>Company</th><th>Lang</th><th>Users</th><th>Branches</th><th>GB</th><th>Sales</th><th>Revenue</th><th>Status</th><th>Actions</th>
+            <th>Company</th><th>Lang</th><th>Users</th><th>Branches</th><th>GB</th><th>Sales</th><th>Revenue</th><th>اشتراک</th><th>Status</th><th>Actions</th>
           </tr></thead>
           <tbody id="companies-tbody">
-            ${rows || '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:2.5rem">No companies. <a href="/sa/companies/add" style="color:#818cf8">Add the first one →</a></td></tr>'}
+            ${rows || '<tr><td colspan="10" style="text-align:center;color:#94a3b8;padding:2.5rem">No companies. <a href="/sa/companies/add" style="color:#818cf8">Add the first one →</a></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -693,7 +756,7 @@ sa.get('/sa/companies/:id', async (c) => {
   const fgb = (n: number) => n >= 1000 ? (n/1000).toFixed(1)+' TB' : n.toFixed(n%1===0?0:1)+' GB';
   const fdate = (d: string) => new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
 
-  const [users, branches, packages, invStats, allocStats, salesStats, recentSales, recentInv] = await Promise.all([
+  const [users, branches, packages, invStats, allocStats, salesStats, recentSales, recentInv, companySubs, activePlans] = await Promise.all([
     c.env.DB.prepare("SELECT id, full_name, username, role, commission_rate, active, created_at FROM users WHERE company_id=? ORDER BY role,created_at").bind(id).all<any>(),
     c.env.DB.prepare("SELECT id, name, active FROM branches WHERE company_id=? ORDER BY name").bind(id).all<any>(),
     c.env.DB.prepare("SELECT id, name, size_gb, sale_price_per_gb, active FROM packages WHERE company_id=? ORDER BY size_gb").bind(id).all<any>(),
@@ -706,6 +769,13 @@ sa.get('/sa/companies/:id', async (c) => {
     c.env.DB.prepare(`SELECT b.created_at, br.name as branch, b.total_gb, b.total_gross, b.notes
       FROM inventory_batches b JOIN branches br ON br.id=b.branch_id
       WHERE b.company_id=? ORDER BY b.created_at DESC LIMIT 6`).bind(id).all<any>(),
+    c.env.DB.prepare(`
+      SELECT cs.*, sp.name as plan_name, sp.color as plan_color
+      FROM company_subscriptions cs
+      JOIN subscription_plans sp ON sp.id=cs.plan_id
+      WHERE cs.company_id=?
+      ORDER BY cs.created_at DESC LIMIT 10`).bind(id).all<any>(),
+    c.env.DB.prepare('SELECT id, name, color FROM subscription_plans WHERE is_active=1 ORDER BY sort_order').all<any>(),
   ]);
 
   const isActive = co.active !== 0;
@@ -781,6 +851,91 @@ sa.get('/sa/companies/:id', async (c) => {
         </div>
       </div>
 
+      <!-- Subscription Section -->
+      ${(() => {
+        const subList = companySubs.results || [];
+        const activeSub = subList.find((s: any) => s.status === 'active' && new Date(s.end_date) >= new Date());
+        const planOptions = (activePlans.results || []).map((p: any) => `<option value="${p.id}">${p.name}</option>`).join('');
+        const subRows = subList.map((s: any) => {
+          const dLeft = Math.ceil((new Date(s.end_date).getTime() - Date.now()) / 86400000);
+          let badge = '';
+          if (s.status === 'cancelled') badge = `<span style="background:#1e293b;color:#64748b;padding:2px 6px;border-radius:99px;font-size:.68rem">لغو</span>`;
+          else if (dLeft < 0) badge = `<span style="background:#7f1d1d;color:#fca5a5;padding:2px 6px;border-radius:99px;font-size:.68rem">منقضی</span>`;
+          else if (dLeft <= 7) badge = `<span style="background:#451a03;color:#fcd34d;padding:2px 6px;border-radius:99px;font-size:.68rem">⚠ ${dLeft}d</span>`;
+          else badge = `<span style="background:#064e3b;color:#6ee7b7;padding:2px 6px;border-radius:99px;font-size:.68rem">✓ ${dLeft}d</span>`;
+          return `<tr>
+            <td><div style="display:flex;align-items:center;gap:.35rem"><div style="width:7px;height:7px;border-radius:50%;background:${s.plan_color}"></div><span style="color:#c7d2fe">${s.plan_name}</span></div></td>
+            <td style="color:#94a3b8;font-size:.78rem">${new Date(s.start_date).toLocaleDateString('en-GB')}</td>
+            <td style="color:#94a3b8;font-size:.78rem">${new Date(s.end_date).toLocaleDateString('en-GB')}</td>
+            <td>${badge}</td>
+            <td style="color:#fbbf24;font-weight:600">${fm(s.amount_paid)}</td>
+            <td style="color:#64748b;font-size:.72rem">${s.payment_method||'cash'}</td>
+          </tr>`;
+        }).join('');
+        const activeSubHtml = activeSub ? `
+          <div style="display:flex;align-items:center;gap:.75rem;background:#0f172a;border-radius:8px;padding:.625rem 1rem;margin-bottom:.75rem">
+            <div style="width:10px;height:10px;border-radius:50%;background:${activeSub.plan_color};flex-shrink:0"></div>
+            <div style="flex:1">
+              <div style="color:#e2e8f0;font-size:.85rem;font-weight:600">${activeSub.plan_name}</div>
+              <div style="color:#64748b;font-size:.72rem">تا ${new Date(activeSub.end_date).toLocaleDateString('en-GB')} · ${Math.ceil((new Date(activeSub.end_date).getTime()-Date.now())/86400000)} روز مانده</div>
+            </div>
+            <span style="background:#064e3b;color:#6ee7b7;padding:3px 10px;border-radius:99px;font-size:.75rem;font-weight:600">فعال</span>
+          </div>` : `<div style="color:#f87171;font-size:.82rem;background:#450a0a;border-radius:8px;padding:.5rem 1rem;margin-bottom:.75rem">⚠ اشتراک فعالی ندارد</div>`;
+        return `
+        <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;overflow:hidden;margin-bottom:1rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:.875rem 1rem;border-bottom:1px solid #334155">
+            <div style="color:#f1f5f9;font-weight:600;font-size:.9rem">🔖 اشتراک‌ها (${subList.length})</div>
+            <button onclick="openModal('add-sub-detail-modal')" class="sa-btn sa-btn-primary sa-btn-sm">+ اشتراک جدید</button>
+          </div>
+          <div style="padding:1rem">
+            ${activeSubHtml}
+            ${subRows ? `<div style="overflow-x:auto"><table class="sa-table"><thead><tr><th>پلن</th><th>شروع</th><th>پایان</th><th>وضعیت</th><th>مبلغ</th><th>روش</th></tr></thead><tbody>${subRows}</tbody></table></div>` : '<div style="color:#64748b;text-align:center;padding:1rem;font-size:.82rem">تاریخچه اشتراکی موجود نیست</div>'}
+          </div>
+        </div>
+
+        <!-- ADD SUB MODAL for company detail -->
+        <div class="modal-overlay" id="add-sub-detail-modal">
+          <div class="modal-box" style="max-width:460px">
+            <div class="modal-header">
+              <div class="modal-title">➕ ثبت اشتراک برای ${co.name}</div>
+              <button class="modal-close" onclick="closeModal('add-sub-detail-modal')">✕</button>
+            </div>
+            <form method="POST" action="/sa/subscriptions/add">
+              <input type="hidden" name="company_id" value="${id}"/>
+              <div class="sa-form-group">
+                <label>پلن اشتراک *</label>
+                <select name="plan_id" required onchange="updateDetailSubPrice(this)">${planOptions}</select>
+              </div>
+              <div class="sa-form-row">
+                <div class="sa-form-group">
+                  <label>تاریخ شروع *</label>
+                  <input type="date" name="start_date" id="det-sub-start" required value="${new Date().toISOString().split('T')[0]}"/>
+                </div>
+                <div class="sa-form-group">
+                  <label>مبلغ پرداخت (؋) *</label>
+                  <input type="number" name="amount_paid" id="det-sub-amount" required min="0" step="50"/>
+                </div>
+              </div>
+              <div class="sa-form-group">
+                <label>روش پرداخت</label>
+                <select name="payment_method">
+                  <option value="cash">💵 نقد</option><option value="bank">🏦 بانک</option>
+                  <option value="card">💳 کارت</option><option value="mobile">📱 موبایل‌پی</option>
+                </select>
+              </div>
+              <div class="sa-form-group">
+                <label>یادداشت</label>
+                <input type="text" name="payment_note" placeholder="اختیاری" dir="rtl"/>
+              </div>
+              <div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1rem">
+                <button type="button" onclick="closeModal('add-sub-detail-modal')" class="sa-btn sa-btn-ghost">لغو</button>
+                <button type="submit" class="sa-btn sa-btn-primary">💾 ثبت اشتراک</button>
+              </div>
+            </form>
+          </div>
+        </div>`;
+      })()}
+
       <!-- Users + Packages/Branches -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
         <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;overflow:hidden">
@@ -842,7 +997,18 @@ sa.get('/sa/companies/:id', async (c) => {
         </div>
       </div>
     </div>
-  </div></div>`);
+  </div></div>`, `<script>
+  const DETAIL_PLAN_PRICES = ${JSON.stringify(Object.fromEntries((activePlans.results||[]).map((p:any)=>[p.id,p.price])))};
+  function updateDetailSubPrice(sel) {
+    const price = DETAIL_PLAN_PRICES[sel.value] || 0;
+    const el = document.getElementById('det-sub-amount');
+    if (el) el.value = price;
+  }
+  document.addEventListener('DOMContentLoaded', function() {
+    const sel = document.querySelector('#add-sub-detail-modal select[name="plan_id"]');
+    if (sel) updateDetailSubPrice(sel);
+  });
+  </script>`);
   return c.html(html);
 });
 
@@ -1250,6 +1416,131 @@ sa.delete('/sa/api/admins/:id', async (c) => {
   if (id === admin.id) return c.json({ success: false, error: 'Cannot delete yourself' }, 400);
   await c.env.DB.prepare('DELETE FROM super_admins WHERE id=?').bind(id).run();
   return c.json({ success: true });
+});
+
+// ============================================================
+// SA Plans Routes
+// ============================================================
+sa.get('/sa/plans', async (c) => {
+  const admin = c.get('sa_admin' as any) as { id: number; username: string; full_name: string };
+  const url = new URL(c.req.url);
+  return c.html(await handlePlansGet(c.env.DB, admin, url, saShell, saNav));
+});
+
+sa.post('/sa/plans/add', async (c) => {
+  const admin = c.get('sa_admin' as any) as { id: number };
+  const form = await c.req.formData();
+  const name          = form.get('name')?.toString().trim() ?? '';
+  const name_en       = form.get('name_en')?.toString().trim() ?? '';
+  const price         = parseFloat(form.get('price')?.toString() ?? '0');
+  const duration_days = parseInt(form.get('duration_days')?.toString() ?? '30');
+  const max_sellers   = parseInt(form.get('max_sellers')?.toString() ?? '5');
+  const max_branches  = parseInt(form.get('max_branches')?.toString() ?? '2');
+  const color         = form.get('color')?.toString() ?? '#4f46e5';
+  const sort_order    = parseInt(form.get('sort_order')?.toString() ?? '0');
+  const featText      = form.get('features_text')?.toString() ?? '';
+  const features      = JSON.stringify(featText.split('\n').map(s => s.trim()).filter(Boolean));
+
+  if (!name) return new Response(null, { status: 302, headers: { 'Location': '/sa/plans?err=نام+پلن+الزامی+است' } });
+
+  await c.env.DB.prepare(`
+    INSERT INTO subscription_plans (name, name_en, price, duration_days, max_sellers, max_branches, features, color, sort_order)
+    VALUES (?,?,?,?,?,?,?,?,?)`
+  ).bind(name, name_en, price, duration_days, max_sellers, max_branches, features, color, sort_order).run();
+
+  return new Response(null, { status: 302, headers: { 'Location': '/sa/plans?ok=1' } });
+});
+
+sa.post('/sa/plans/:id/edit', async (c) => {
+  const id   = c.req.param('id');
+  const form = await c.req.formData();
+  const name          = form.get('name')?.toString().trim() ?? '';
+  const name_en       = form.get('name_en')?.toString().trim() ?? '';
+  const price         = parseFloat(form.get('price')?.toString() ?? '0');
+  const duration_days = parseInt(form.get('duration_days')?.toString() ?? '30');
+  const max_sellers   = parseInt(form.get('max_sellers')?.toString() ?? '5');
+  const max_branches  = parseInt(form.get('max_branches')?.toString() ?? '2');
+  const color         = form.get('color')?.toString() ?? '#4f46e5';
+  const sort_order    = parseInt(form.get('sort_order')?.toString() ?? '0');
+  const is_active     = form.get('is_active')?.toString() === '1' ? 1 : 0;
+  const featText      = form.get('features_text')?.toString() ?? '';
+  const features      = JSON.stringify(featText.split('\n').map(s => s.trim()).filter(Boolean));
+
+  await c.env.DB.prepare(`
+    UPDATE subscription_plans SET name=?, name_en=?, price=?, duration_days=?, max_sellers=?,
+      max_branches=?, features=?, color=?, sort_order=?, is_active=? WHERE id=?`
+  ).bind(name, name_en, price, duration_days, max_sellers, max_branches, features, color, sort_order, is_active, id).run();
+
+  return new Response(null, { status: 302, headers: { 'Location': '/sa/plans?ok=1' } });
+});
+
+sa.post('/sa/plans/:id/delete', async (c) => {
+  const id = c.req.param('id');
+  try {
+    // Don't delete if active subscriptions exist
+    const active = await c.env.DB.prepare(
+      `SELECT COUNT(*) as n FROM company_subscriptions WHERE plan_id=? AND status='active' AND end_date>=date('now')`
+    ).bind(id).first<{n:number}>();
+    if ((active?.n ?? 0) > 0) {
+      return c.json({ success: false, error: 'این پلن اشتراک‌های فعال دارد و قابل حذف نیست' });
+    }
+    await c.env.DB.prepare('DELETE FROM subscription_plans WHERE id=?').bind(id).run();
+    return c.json({ success: true });
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message }, 500);
+  }
+});
+
+// ============================================================
+// SA Subscriptions Routes
+// ============================================================
+sa.get('/sa/subscriptions', async (c) => {
+  const admin = c.get('sa_admin' as any) as { id: number; username: string; full_name: string };
+  const url = new URL(c.req.url);
+  return c.html(await handleSubscriptionsGet(c.env.DB, admin, url, saShell, saNav));
+});
+
+sa.post('/sa/subscriptions/add', async (c) => {
+  const admin = c.get('sa_admin' as any) as { id: number };
+  const form = await c.req.formData();
+  const company_id     = parseInt(form.get('company_id')?.toString() ?? '0');
+  const plan_id        = parseInt(form.get('plan_id')?.toString() ?? '0');
+  const start_date     = form.get('start_date')?.toString() ?? new Date().toISOString().split('T')[0];
+  const amount_paid    = parseFloat(form.get('amount_paid')?.toString() ?? '0');
+  const payment_method = form.get('payment_method')?.toString() ?? 'cash';
+  const payment_note   = form.get('payment_note')?.toString() ?? '';
+
+  if (!company_id || !plan_id) {
+    return new Response(null, { status: 302, headers: { 'Location': '/sa/subscriptions?err=1' } });
+  }
+
+  // Get plan duration to calculate end_date
+  const plan = await c.env.DB.prepare('SELECT duration_days FROM subscription_plans WHERE id=?').bind(plan_id).first<{duration_days:number}>();
+  const durDays = plan?.duration_days ?? 30;
+  const startDt = new Date(start_date);
+  const endDt = new Date(startDt.getTime() + durDays * 24 * 60 * 60 * 1000);
+  const end_date = endDt.toISOString().split('T')[0];
+
+  // Mark previous active subscriptions for this company as expired
+  await c.env.DB.prepare(
+    `UPDATE company_subscriptions SET status='expired' WHERE company_id=? AND status='active'`
+  ).bind(company_id).run();
+
+  await c.env.DB.prepare(`
+    INSERT INTO company_subscriptions (company_id, plan_id, start_date, end_date, amount_paid, payment_method, payment_note, status, created_by)
+    VALUES (?,?,?,?,?,?,?,'active',?)`
+  ).bind(company_id, plan_id, start_date, end_date, amount_paid, payment_method, payment_note || null, admin.id).run();
+
+  return new Response(null, { status: 302, headers: { 'Location': '/sa/subscriptions?ok=1' } });
+});
+
+// ============================================================
+// SA Revenue Route
+// ============================================================
+sa.get('/sa/revenue', async (c) => {
+  const admin = c.get('sa_admin' as any) as { id: number; username: string; full_name: string };
+  const url = new URL(c.req.url);
+  return c.html(await handleRevenueGet(c.env.DB, admin, url, saShell, saNav));
 });
 
 export default sa;
