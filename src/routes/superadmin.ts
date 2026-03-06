@@ -586,12 +586,105 @@ sa.get('/sa/companies', async (c) => {
 });
 
 // ============================================================
+// SA Add Company  ← MUST be before /sa/companies/:id
+// ============================================================
+sa.get('/sa/companies/add', (c) => {
+  const admin = c.get('sa_admin' as any) as { id: number; username: string; full_name: string };
+  const html = saShell('افزودن شرکت', saNav('companies', admin.full_name) + `
+    <div class="sa-topbar">
+      <div class="sa-topbar-title">🏢 ثبت شرکت جدید</div>
+      <a href="/sa/companies" class="sa-btn sa-btn-ghost">← برگشت</a>
+    </div>
+    <div class="sa-content">
+      <div class="sa-card" style="max-width:540px">
+        <div style="color:#f1f5f9;font-weight:700;font-size:.95rem;margin-bottom:1.25rem">🏢 مشخصات شرکت</div>
+        <form method="POST" action="/sa/companies/add">
+          <div class="sa-form-row">
+            <div class="sa-form-group">
+              <label>نام شرکت *</label>
+              <input type="text" name="company_name" required placeholder="مثال: شرکت هات‌اسپات احمد"/>
+            </div>
+            <div class="sa-form-group">
+              <label>شناسه (Slug) *</label>
+              <input type="text" name="slug" required placeholder="ahmad-hotspot" pattern="[a-z0-9-]+" title="فقط حروف انگلیسی کوچک، اعداد و خط تیره"/>
+            </div>
+          </div>
+          <div class="sa-form-group">
+            <label>زبان پیش‌فرض</label>
+            <select name="default_language">
+              <option value="fa">دری (Dari)</option>
+              <option value="ps">پښتو (Pashto)</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <hr style="border-color:#334155;margin:1.25rem 0"/>
+          <div style="color:#f1f5f9;font-weight:700;font-size:.95rem;margin-bottom:1rem">👤 حساب مالک</div>
+          <div class="sa-form-row">
+            <div class="sa-form-group">
+              <label>نام کامل مالک *</label>
+              <input type="text" name="full_name" required placeholder="احمد محمدی"/>
+            </div>
+            <div class="sa-form-group">
+              <label>نام کاربری *</label>
+              <input type="text" name="username" required placeholder="admin"/>
+            </div>
+          </div>
+          <div class="sa-form-group">
+            <label>رمز عبور *</label>
+            <input type="password" name="password" required minlength="6" placeholder="حداقل ۶ کاراکتر"/>
+          </div>
+          <div style="display:flex;gap:.75rem;margin-top:1.25rem">
+            <a href="/sa/companies" class="sa-btn sa-btn-ghost">لغو</a>
+            <button type="submit" class="sa-btn sa-btn-primary" style="flex:1;justify-content:center">✓ ایجاد شرکت</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div></div>`);
+  return c.html(html);
+});
+
+sa.post('/sa/companies/add', async (c) => {
+  const form = await c.req.formData();
+  const companyName = form.get('company_name')?.toString().trim() ?? '';
+  const slug = form.get('slug')?.toString().trim().toLowerCase() ?? '';
+  const defaultLanguage = form.get('default_language')?.toString() ?? 'fa';
+  const fullName = form.get('full_name')?.toString().trim() ?? '';
+  const username = form.get('username')?.toString().trim() ?? '';
+  const password = form.get('password')?.toString() ?? '';
+
+  if (!companyName || !slug || !fullName || !username || !password) {
+    return c.html('<p style="color:red">فیلدهای ضروری خالی است</p><a href="/sa/companies/add">← برگشت</a>', 400);
+  }
+
+  const hash = await hashPassword(password);
+  try {
+    const company = await c.env.DB.prepare(
+      'INSERT INTO companies (name, slug, default_language) VALUES (?, ?, ?) RETURNING id'
+    ).bind(companyName, slug, defaultLanguage).first<{id:number}>();
+
+    if (!company) throw new Error('Failed to create company');
+
+    await c.env.DB.prepare(
+      'INSERT INTO users (company_id, username, password_hash, full_name, role, commission_rate, language) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(company.id, username, hash, fullName, 'owner', 0, defaultLanguage).run();
+
+    await c.env.DB.prepare(
+      'INSERT INTO branches (company_id, name) VALUES (?, ?)'
+    ).bind(company.id, 'شعبه اصلی').run();
+
+    return new Response(null, { status: 302, headers: { 'Location': '/sa/companies?added=1' } });
+  } catch (e: any) {
+    return c.html(`<p style="color:red">خطا: ${e.message}</p><a href="/sa/companies/add">← برگشت</a>`, 400);
+  }
+});
+
+// ============================================================
 // SA Company Detail  /sa/companies/:id
 // ============================================================
 sa.get('/sa/companies/:id', async (c) => {
   const admin = c.get('sa_admin' as any) as { id: number; username: string; full_name: string };
   const id = c.req.param('id');
-  if (id === 'add') return new Response(null, { status: 302, headers: { 'Location': '/sa/companies/add' } });
 
   const co = await c.env.DB.prepare('SELECT * FROM companies WHERE id=?').bind(id).first<any>();
   if (!co) return c.html('Company not found', 404);
@@ -751,100 +844,6 @@ sa.get('/sa/companies/:id', async (c) => {
     </div>
   </div></div>`);
   return c.html(html);
-});
-
-// ============================================================
-// SA Add Company
-// ============================================================
-sa.get('/sa/companies/add', (c) => {
-  const admin = c.get('sa_admin' as any) as { id: number; username: string; full_name: string };
-  const html = saShell('Add Company', saNav('companies', admin.full_name) + `
-    <div class="sa-topbar">
-      <div class="sa-topbar-title">Add New Company</div>
-      <a href="/sa/companies" class="sa-btn sa-btn-ghost">← Back</a>
-    </div>
-    <div class="sa-content">
-      <div class="sa-card" style="max-width:540px">
-        <div style="color:#f1f5f9;font-weight:700;font-size:.95rem;margin-bottom:1.25rem">🏢 Company Details</div>
-        <form method="POST" action="/sa/companies/add">
-          <div class="sa-form-row">
-            <div class="sa-form-group">
-              <label>Company Name *</label>
-              <input type="text" name="company_name" required placeholder="My HotSpot Co."/>
-            </div>
-            <div class="sa-form-group">
-              <label>Slug (unique URL ID) *</label>
-              <input type="text" name="slug" required placeholder="my-hotspot" pattern="[a-z0-9-]+" title="lowercase letters, numbers, hyphens only"/>
-            </div>
-          </div>
-          <div class="sa-form-group">
-            <label>Default Language</label>
-            <select name="default_language">
-              <option value="en">English</option>
-              <option value="fa">دری (Dari)</option>
-              <option value="ps">پښتو (Pashto)</option>
-            </select>
-          </div>
-          <hr style="border-color:#334155;margin:1.25rem 0"/>
-          <div style="color:#f1f5f9;font-weight:700;font-size:.95rem;margin-bottom:1rem">👤 Owner Account</div>
-          <div class="sa-form-row">
-            <div class="sa-form-group">
-              <label>Owner Full Name *</label>
-              <input type="text" name="full_name" required placeholder="John Doe"/>
-            </div>
-            <div class="sa-form-group">
-              <label>Username *</label>
-              <input type="text" name="username" required placeholder="owner"/>
-            </div>
-          </div>
-          <div class="sa-form-group">
-            <label>Password *</label>
-            <input type="password" name="password" required minlength="6" placeholder="Min 6 characters"/>
-          </div>
-          <div style="display:flex;gap:.75rem;margin-top:1.25rem">
-            <a href="/sa/companies" class="sa-btn sa-btn-ghost">Cancel</a>
-            <button type="submit" class="sa-btn sa-btn-primary" style="flex:1;justify-content:center">✓ Create Company</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  </div></div>`);
-  return c.html(html);
-});
-
-sa.post('/sa/companies/add', async (c) => {
-  const form = await c.req.formData();
-  const companyName = form.get('company_name')?.toString().trim() ?? '';
-  const slug = form.get('slug')?.toString().trim().toLowerCase() ?? '';
-  const defaultLanguage = form.get('default_language')?.toString() ?? 'en';
-  const fullName = form.get('full_name')?.toString().trim() ?? '';
-  const username = form.get('username')?.toString().trim() ?? '';
-  const password = form.get('password')?.toString() ?? '';
-
-  if (!companyName || !slug || !fullName || !username || !password) {
-    return c.html('<p style="color:red">Missing required fields</p><a href="/sa/companies/add">← Go back</a>', 400);
-  }
-
-  const hash = await hashPassword(password);
-  try {
-    const company = await c.env.DB.prepare(
-      'INSERT INTO companies (name, slug, default_language) VALUES (?, ?, ?) RETURNING id'
-    ).bind(companyName, slug, defaultLanguage).first<{id:number}>();
-
-    if (!company) throw new Error('Failed to create company');
-
-    await c.env.DB.prepare(
-      'INSERT INTO users (company_id, username, password_hash, full_name, role, commission_rate, language) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(company.id, username, hash, fullName, 'owner', 0, defaultLanguage).run();
-
-    await c.env.DB.prepare(
-      'INSERT INTO branches (company_id, name) VALUES (?, ?)'
-    ).bind(company.id, 'Main Branch').run();
-
-    return new Response(null, { status: 302, headers: { 'Location': '/sa/companies?added=1' } });
-  } catch (e: any) {
-    return c.html(`<p style="color:red">Error: ${e.message}</p><a href="/sa/companies/add">← Go back</a>`, 400);
-  }
 });
 
 // ============================================================

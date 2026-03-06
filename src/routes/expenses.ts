@@ -392,8 +392,10 @@ expenses.post('/:id', async (c) => {
   return new Response(null, { status: 302, headers: { 'Location': '/expenses' } });
 });
 
-// ── DELETE /api/expenses/:id ──────────────────────────────────
-expenses.delete('/api/expenses/:id', async (c) => {
+// ── DELETE /api/expenses/:id ─────────────────────────────────
+// Route is /:id (mounted at /expenses, so DELETE /expenses/:id)
+// Also accessible via the global /api/expenses/:id (see index.ts)
+expenses.delete('/:id', async (c) => {
   const user = c.get('user');
   const isOwner = user.role === 'owner';
   const id = c.req.param('id');

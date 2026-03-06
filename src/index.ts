@@ -142,6 +142,19 @@ app.delete('/api/payments/:id', async (c) => {
   return c.json({success:true});
 });
 
+// Delete personal expense (seller deletes own, owner deletes company expense)
+app.delete('/api/expenses/:id', async (c) => {
+  const user = c.get('user');
+  const isOwner = user.role === 'owner';
+  const id = c.req.param('id');
+  const deleteFilter = isOwner
+    ? ` AND (seller_id IS NULL OR seller_id = 0)`
+    : ` AND seller_id = ${user.id}`;
+  await c.env.DB.prepare(`DELETE FROM expenses WHERE id=? AND company_id=? ${deleteFilter}`)
+    .bind(id, user.company_id).run();
+  return c.json({ success: true });
+});
+
 app.delete('/api/branches/:id', async (c) => {
   const user = c.get('user');
   if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
