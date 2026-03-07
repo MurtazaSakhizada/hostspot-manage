@@ -48,65 +48,221 @@ function saShell(title: string, body: string, scripts = ''): string {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    /* ─── SA Panel - Refined Dark Theme ─── */
     *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:'Inter',sans-serif;background:#0f172a;color:#e2e8f0}
+    :root{
+      --sa-bg:#0d1117;
+      --sa-surface:#161b27;
+      --sa-surface2:#1c2333;
+      --sa-border:#21293d;
+      --sa-border2:#2a3347;
+      --sa-text:#cdd5e0;
+      --sa-text2:#8892aa;
+      --sa-text3:#4d5a72;
+      --sa-accent:#6366f1;
+      --sa-accent2:#818cf8;
+      --sa-accent-glow:rgba(99,102,241,.2);
+      --sa-r:10px;
+      --sa-r2:14px;
+    }
+    html{scroll-behavior:smooth}
+    body{font-family:'Inter',system-ui,sans-serif;background:var(--sa-bg);color:var(--sa-text);-webkit-font-smoothing:antialiased;line-height:1.55;font-size:14px}
+    /* Layout */
     .sa-layout{display:flex;min-height:100vh}
-    .sa-sidebar{width:240px;background:#1e293b;display:flex;flex-direction:column;flex-shrink:0;border-right:1px solid #334155}
-    .sa-sidebar-header{padding:1.25rem 1rem 1rem;border-bottom:1px solid #334155}
-    .sa-brand{display:flex;align-items:center;gap:.6rem;color:#f1f5f9;font-size:1rem;font-weight:700}
-    .sa-brand-badge{background:#7c3aed;color:#fff;font-size:.6rem;font-weight:700;padding:2px 6px;border-radius:99px;letter-spacing:.04em;text-transform:uppercase}
-    .sa-nav{flex:1;padding:.75rem;display:flex;flex-direction:column;gap:.2rem}
-    .sa-nav-link{display:flex;align-items:center;gap:.625rem;padding:.55rem .875rem;border-radius:8px;color:#94a3b8;text-decoration:none;font-size:.875rem;font-weight:500;transition:all .15s}
-    .sa-nav-link:hover{background:#334155;color:#f1f5f9}
-    .sa-nav-link.active{background:#4f46e5;color:#fff}
-    .sa-nav-sep{height:1px;background:#334155;margin:.5rem 0}
-    .sa-sidebar-footer{padding:.875rem .75rem;border-top:1px solid #334155}
-    .sa-user-info{display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem}
-    .sa-avatar{width:34px;height:34px;background:#7c3aed;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:.85rem;font-weight:700;flex-shrink:0}
-    .sa-main{flex:1;display:flex;flex-direction:column;overflow:auto;min-width:0}
-    .sa-topbar{background:#1e293b;padding:.875rem 1.5rem;border-bottom:1px solid #334155;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap}
-    .sa-topbar-title{color:#f1f5f9;font-size:1rem;font-weight:600}
+    /* Sidebar */
+    .sa-sidebar{
+      width:248px;background:var(--sa-surface);display:flex;flex-direction:column;
+      flex-shrink:0;border-right:1px solid var(--sa-border);
+      position:sticky;top:0;height:100vh;overflow-y:auto;scrollbar-width:none;
+    }
+    .sa-sidebar::-webkit-scrollbar{display:none}
+    .sa-sidebar-header{padding:1.25rem 1rem 1.125rem;border-bottom:1px solid var(--sa-border)}
+    .sa-brand{display:flex;align-items:center;gap:.625rem;text-decoration:none}
+    .sa-brand-icon{
+      width:36px;height:36px;
+      background:linear-gradient(135deg,#4338ca,#7c3aed);
+      border-radius:10px;display:flex;align-items:center;justify-content:center;
+      font-size:1.1rem;box-shadow:0 2px 10px rgba(99,102,241,.35);flex-shrink:0;
+    }
+    .sa-brand-name{color:#e2e8f0;font-size:.9rem;font-weight:700;letter-spacing:-.01em}
+    .sa-brand-badge{
+      background:rgba(99,102,241,.2);color:var(--sa-accent2);
+      font-size:.58rem;font-weight:700;padding:2px 6px;border-radius:99px;
+      letter-spacing:.05em;text-transform:uppercase;border:1px solid rgba(99,102,241,.3);
+    }
+    .sa-nav{flex:1;padding:.75rem .625rem;display:flex;flex-direction:column;gap:.15rem}
+    .sa-nav-label{
+      padding:.625rem .75rem .25rem;font-size:.63rem;font-weight:700;
+      text-transform:uppercase;letter-spacing:.1em;color:var(--sa-text3);
+    }
+    .sa-nav-link{
+      display:flex;align-items:center;gap:.625rem;padding:.525rem .75rem;
+      border-radius:var(--sa-r);color:var(--sa-text2);text-decoration:none;
+      font-size:.875rem;font-weight:500;transition:all .15s;position:relative;
+    }
+    .sa-nav-link:hover{background:var(--sa-surface2);color:#c7d2fe}
+    .sa-nav-link.active{background:rgba(99,102,241,.15);color:var(--sa-accent2)}
+    .sa-nav-link.active::before{
+      content:'';position:absolute;left:0;top:20%;bottom:20%;
+      width:3px;background:var(--sa-accent);border-radius:0 3px 3px 0;
+    }
+    .sa-nav-sep{height:1px;background:var(--sa-border);margin:.5rem 0}
+    .sa-sidebar-footer{padding:.875rem .75rem;border-top:1px solid var(--sa-border)}
+    .sa-user-info{display:flex;align-items:center;gap:.625rem;margin-bottom:.75rem}
+    .sa-avatar{
+      width:34px;height:34px;
+      background:linear-gradient(135deg,#4f46e5,#7c3aed);
+      border-radius:9px;display:flex;align-items:center;justify-content:center;
+      color:#fff;font-size:.82rem;font-weight:700;flex-shrink:0;
+      box-shadow:0 2px 8px rgba(99,102,241,.3);
+    }
+    .sa-user-name{color:#e2e8f0;font-size:.8rem;font-weight:600}
+    .sa-user-role{color:var(--sa-text3);font-size:.68rem;margin-top:.1rem}
+    .sa-logout{
+      display:flex;align-items:center;gap:.5rem;width:100%;justify-content:center;
+      padding:.4rem;border-radius:var(--sa-r);color:var(--sa-text2);
+      text-decoration:none;font-size:.78rem;font-weight:500;
+      border:1px solid var(--sa-border);transition:all .15s;
+    }
+    .sa-logout:hover{background:rgba(239,68,68,.1);color:#fca5a5;border-color:rgba(239,68,68,.3)}
+    /* Main */
+    .sa-main{flex:1;display:flex;flex-direction:column;overflow:auto;min-width:0;background:var(--sa-bg)}
+    .sa-topbar{
+      background:var(--sa-surface);padding:.875rem 1.5rem;
+      border-bottom:1px solid var(--sa-border);
+      display:flex;justify-content:space-between;align-items:center;
+      gap:1rem;flex-wrap:wrap;position:sticky;top:0;z-index:50;
+    }
+    .sa-topbar-title{color:#e2e8f0;font-size:1rem;font-weight:700;letter-spacing:-.01em}
     .sa-content{flex:1;padding:1.5rem}
-    .sa-card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:1.25rem}
+    /* Cards */
+    .sa-card{
+      background:var(--sa-surface);border:1px solid var(--sa-border);
+      border-radius:var(--sa-r2);padding:1.25rem;
+    }
+    /* Table */
     .sa-table{width:100%;border-collapse:collapse}
-    .sa-table th{color:#94a3b8;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:.625rem .875rem;text-align:left;border-bottom:1px solid #334155;white-space:nowrap}
-    .sa-table td{color:#e2e8f0;font-size:.875rem;padding:.7rem .875rem;border-bottom:1px solid #0f172a;vertical-align:middle}
-    .sa-table tbody tr:hover td{background:#ffffff08}
-    .badge-active{background:#064e3b;color:#6ee7b7;padding:2px 8px;border-radius:99px;font-size:.7rem;font-weight:600;white-space:nowrap}
-    .badge-inactive{background:#7f1d1d;color:#fca5a5;padding:2px 8px;border-radius:99px;font-size:.7rem;font-weight:600;white-space:nowrap}
-    .sa-btn{display:inline-flex;align-items:center;gap:.3rem;padding:.4rem .75rem;border-radius:6px;font-size:.8rem;font-weight:600;cursor:pointer;border:none;text-decoration:none;transition:all .15s;white-space:nowrap}
-    .sa-btn-primary{background:#4f46e5;color:#fff}.sa-btn-primary:hover{background:#4338ca}
-    .sa-btn-danger{background:#7f1d1d;color:#fca5a5}.sa-btn-danger:hover{background:#991b1b;color:#fff}
-    .sa-btn-warning{background:#451a03;color:#fcd34d}.sa-btn-warning:hover{background:#78350f;color:#fff}
-    .sa-btn-success{background:#064e3b;color:#6ee7b7}.sa-btn-success:hover{background:#065f46;color:#fff}
-    .sa-btn-ghost{background:transparent;color:#94a3b8;border:1px solid #334155}.sa-btn-ghost:hover{background:#334155;color:#f1f5f9}
-    .sa-btn-sm{padding:.25rem .55rem;font-size:.75rem}
+    .sa-table th{
+      color:var(--sa-text2);font-size:.7rem;font-weight:600;text-transform:uppercase;
+      letter-spacing:.07em;padding:.7rem 1rem;text-align:left;
+      border-bottom:1px solid var(--sa-border);white-space:nowrap;
+      background:var(--sa-bg);
+    }
+    .sa-table td{
+      color:var(--sa-text);font-size:.875rem;padding:.75rem 1rem;
+      border-bottom:1px solid var(--sa-border);vertical-align:middle;
+    }
+    .sa-table tbody tr{transition:background .12s}
+    .sa-table tbody tr:hover td{background:rgba(255,255,255,.02)}
+    .sa-table tbody tr:last-child td{border-bottom:none}
+    /* Badges */
+    .badge-active{
+      background:rgba(16,185,129,.15);color:#34d399;
+      padding:3px 9px;border-radius:99px;font-size:.68rem;font-weight:600;
+      white-space:nowrap;border:1px solid rgba(16,185,129,.25);
+    }
+    .badge-inactive{
+      background:rgba(239,68,68,.12);color:#f87171;
+      padding:3px 9px;border-radius:99px;font-size:.68rem;font-weight:600;
+      white-space:nowrap;border:1px solid rgba(239,68,68,.25);
+    }
+    /* Buttons */
+    .sa-btn{
+      display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .8rem;
+      border-radius:8px;font-size:.8rem;font-weight:600;cursor:pointer;border:none;
+      text-decoration:none;transition:all .15s;white-space:nowrap;letter-spacing:-.01em;
+    }
+    .sa-btn:active{transform:scale(.96)}
+    .sa-btn-primary{background:var(--sa-accent);color:#fff;box-shadow:0 2px 8px var(--sa-accent-glow)}
+    .sa-btn-primary:hover{background:#4338ca;box-shadow:0 4px 14px rgba(99,102,241,.35);transform:translateY(-1px)}
+    .sa-btn-danger{background:rgba(239,68,68,.15);color:#f87171;border:1px solid rgba(239,68,68,.25)}
+    .sa-btn-danger:hover{background:rgba(239,68,68,.25);color:#fca5a5;transform:translateY(-1px)}
+    .sa-btn-warning{background:rgba(245,158,11,.15);color:#fbbf24;border:1px solid rgba(245,158,11,.25)}
+    .sa-btn-warning:hover{background:rgba(245,158,11,.25);color:#fcd34d;transform:translateY(-1px)}
+    .sa-btn-success{background:rgba(16,185,129,.15);color:#34d399;border:1px solid rgba(16,185,129,.25)}
+    .sa-btn-success:hover{background:rgba(16,185,129,.25);color:#6ee7b7;transform:translateY(-1px)}
+    .sa-btn-ghost{background:transparent;color:var(--sa-text2);border:1px solid var(--sa-border2)}
+    .sa-btn-ghost:hover{background:var(--sa-surface2);color:#c7d2fe;border-color:rgba(99,102,241,.35)}
+    .sa-btn-sm{padding:.25rem .6rem;font-size:.75rem;border-radius:6px}
+    /* Forms */
     .sa-form-group{margin-bottom:.875rem}
-    .sa-form-group label{display:block;color:#94a3b8;font-size:.8rem;font-weight:500;margin-bottom:.35rem}
-    .sa-form-group input,.sa-form-group select,.sa-form-group textarea{width:100%;padding:.6rem .875rem;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:.875rem;outline:none;font-family:inherit}
-    .sa-form-group input:focus,.sa-form-group select:focus,.sa-form-group textarea:focus{border-color:#4f46e5}
+    .sa-form-group label{display:block;color:var(--sa-text2);font-size:.78rem;font-weight:600;margin-bottom:.35rem;letter-spacing:.01em}
+    .sa-form-group input,.sa-form-group select,.sa-form-group textarea{
+      width:100%;padding:.6rem .875rem;background:var(--sa-bg);
+      border:1.5px solid var(--sa-border2);border-radius:8px;color:#e2e8f0;
+      font-size:.875rem;outline:none;font-family:inherit;transition:border-color .15s,box-shadow .15s;
+    }
+    .sa-form-group input:focus,.sa-form-group select:focus,.sa-form-group textarea:focus{
+      border-color:var(--sa-accent);box-shadow:0 0 0 3px var(--sa-accent-glow);
+    }
+    .sa-form-group input:hover:not(:focus),.sa-form-group select:hover:not(:focus){border-color:#334155}
     .sa-form-row{display:grid;grid-template-columns:1fr 1fr;gap:.875rem}
-    .sa-alert{padding:.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:.875rem}
-    .sa-alert-error{background:#7f1d1d;color:#fca5a5;border:1px solid #991b1b}
-    .sa-alert-success{background:#064e3b;color:#6ee7b7;border:1px solid #065f46}
-    .sa-login-wrap{min-height:100vh;background:#0f172a;display:flex;align-items:center;justify-content:center}
-    .sa-login-card{background:#1e293b;border:1px solid #334155;border-radius:16px;padding:2.5rem;width:100%;max-width:380px}
+    /* Alerts */
+    .sa-alert{padding:.75rem 1rem;border-radius:var(--sa-r);margin-bottom:1rem;font-size:.875rem;border-left:3px solid}
+    .sa-alert-error{background:rgba(239,68,68,.1);color:#fca5a5;border-color:#ef4444}
+    .sa-alert-success{background:rgba(16,185,129,.1);color:#6ee7b7;border-color:#10b981}
+    /* Login */
+    .sa-login-wrap{min-height:100vh;background:var(--sa-bg);display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+    .sa-login-wrap::before{
+      content:'';position:absolute;inset:0;
+      background:radial-gradient(circle at 30% 40%,rgba(99,102,241,.12) 0%,transparent 55%),
+                 radial-gradient(circle at 70% 70%,rgba(139,92,246,.08) 0%,transparent 50%);
+    }
+    .sa-login-card{
+      background:var(--sa-surface);border:1px solid var(--sa-border2);
+      border-radius:20px;padding:2.5rem;width:100%;max-width:380px;
+      box-shadow:0 20px 60px rgba(0,0,0,.4);position:relative;z-index:1;
+    }
+    /* KPI */
     .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem}
-    .kpi-card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:1.25rem}
-    .kpi-label{color:#94a3b8;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem}
-    .kpi-value{font-size:1.9rem;font-weight:800;line-height:1;margin-bottom:.25rem}
-    .kpi-sub{color:#64748b;font-size:.73rem}
+    .kpi-card{
+      background:var(--sa-surface);border:1px solid var(--sa-border);
+      border-radius:var(--sa-r2);padding:1.25rem;
+      transition:all .2s;position:relative;overflow:hidden;
+    }
+    .kpi-card:hover{border-color:var(--sa-border2);box-shadow:0 4px 20px rgba(0,0,0,.3)}
+    .kpi-card::after{
+      content:'';position:absolute;inset:0;
+      background:linear-gradient(145deg,rgba(255,255,255,.02) 0%,transparent 60%);
+      pointer-events:none;
+    }
+    .kpi-label{color:var(--sa-text2);font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.5rem}
+    .kpi-value{font-size:1.9rem;font-weight:800;line-height:1;margin-bottom:.25rem;letter-spacing:-.02em}
+    .kpi-sub{color:var(--sa-text3);font-size:.72rem}
+    /* Search */
     .search-bar{position:relative;margin-bottom:1rem}
-    .search-bar input{width:100%;padding:.65rem 1rem .65rem 2.5rem;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:.875rem;outline:none}
-    .search-bar input:focus{border-color:#4f46e5}
-    .search-bar::before{content:'🔍';position:absolute;left:.75rem;top:50%;transform:translateY(-50%);font-size:.85rem;pointer-events:none}
-    .modal-overlay{display:none;position:fixed;inset:0;background:#00000080;align-items:center;justify-content:center;z-index:999}
+    .search-bar input{
+      width:100%;padding:.65rem 1rem .65rem 2.5rem;
+      background:var(--sa-bg);border:1.5px solid var(--sa-border2);
+      border-radius:var(--sa-r);color:#e2e8f0;font-size:.875rem;outline:none;
+      transition:border-color .15s,box-shadow .15s;
+    }
+    .search-bar input:focus{border-color:var(--sa-accent);box-shadow:0 0 0 3px var(--sa-accent-glow)}
+    .search-bar::before{content:'🔍';position:absolute;left:.75rem;top:50%;transform:translateY(-50%);font-size:.82rem;pointer-events:none}
+    /* Modals */
+    .modal-overlay{
+      display:none;position:fixed;inset:0;
+      background:rgba(0,0,0,.6);backdrop-filter:blur(4px);
+      align-items:center;justify-content:center;z-index:999;
+    }
     .modal-overlay.open{display:flex}
-    .modal-box{background:#1e293b;border:1px solid #334155;border-radius:16px;padding:2rem;width:100%;max-width:440px}
-    .modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem}
-    .modal-title{color:#f1f5f9;font-size:1rem;font-weight:700}
-    .modal-close{background:none;border:none;color:#94a3b8;font-size:1.2rem;cursor:pointer;line-height:1}
-    .modal-close:hover{color:#f1f5f9}
+    .modal-box{
+      background:var(--sa-surface);border:1px solid var(--sa-border2);
+      border-radius:18px;padding:2rem;width:100%;max-width:440px;
+      max-height:90vh;overflow-y:auto;
+      box-shadow:0 20px 60px rgba(0,0,0,.5);
+      transform:scale(.96) translateY(8px);
+      animation:modalIn .25s cubic-bezier(0.34,1.56,0.64,1) forwards;
+    }
+    @keyframes modalIn{to{transform:scale(1) translateY(0)}}
+    .modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem;padding-bottom:.875rem;border-bottom:1px solid var(--sa-border)}
+    .modal-title{color:#e2e8f0;font-size:1rem;font-weight:700;letter-spacing:-.01em}
+    .modal-close{
+      background:none;border:none;color:var(--sa-text2);font-size:1.1rem;
+      cursor:pointer;padding:.3rem;border-radius:6px;transition:all .15s;
+      width:28px;height:28px;display:flex;align-items:center;justify-content:center;
+    }
+    .modal-close:hover{background:var(--sa-surface2);color:#e2e8f0}
   </style>
 </head>
 <body>
@@ -179,25 +335,27 @@ function saNav(active: string, adminName: string): string {
     <aside class="sa-sidebar">
       <div class="sa-sidebar-header">
         <div class="sa-brand">
-          <span>📶</span>
-          <span>HotSpot</span>
-          <span class="sa-brand-badge">SUPER</span>
+          <div class="sa-brand-icon">📶</div>
+          <div>
+            <div class="sa-brand-name">HotSpot</div>
+          </div>
+          <span class="sa-brand-badge">SA</span>
         </div>
       </div>
       <nav class="sa-nav">
         ${navHtml}
         <div class="sa-nav-sep"></div>
-        <a href="/login" class="sa-nav-link" style="font-size:.8rem;color:#64748b">↩ Tenant Login</a>
+        <a href="/login" class="sa-nav-link" style="font-size:.8rem;color:var(--sa-text3)">↩ Tenant Login</a>
       </nav>
       <div class="sa-sidebar-footer">
         <div class="sa-user-info">
           <div class="sa-avatar">${adminName.charAt(0).toUpperCase()}</div>
           <div>
-            <div style="color:#f1f5f9;font-size:.85rem;font-weight:600">${adminName}</div>
-            <div style="color:#64748b;font-size:.7rem">Super Administrator</div>
+            <div class="sa-user-name">${adminName}</div>
+            <div class="sa-user-role">Super Administrator</div>
           </div>
         </div>
-        <a href="/sa/logout" class="sa-btn sa-btn-ghost" style="width:100%;justify-content:center;font-size:.82rem">⏻ Logout</a>
+        <a href="/sa/logout" class="sa-logout">⏻ Logout</a>
       </div>
     </aside>
     <div class="sa-main">`;
@@ -215,11 +373,11 @@ sa.get('/sa/login', (c) => {
   <div class="sa-login-wrap">
     <div class="sa-login-card">
       <div style="text-align:center;margin-bottom:2rem">
-        <div style="font-size:2.5rem;display:block;margin-bottom:.75rem">⚙️</div>
-        <h1 style="color:#f1f5f9;font-size:1.3rem;font-weight:700;margin:0 0 .25rem">Super Admin</h1>
-        <p style="color:#94a3b8;font-size:.85rem;margin:0">HotSpot Manager Platform</p>
+        <div style="width:64px;height:64px;background:linear-gradient(135deg,#4338ca,#7c3aed);border-radius:18px;display:flex;align-items:center;justify-content:center;margin:0 auto .875rem;font-size:1.75rem;box-shadow:0 8px 24px rgba(99,102,241,.4)">📶</div>
+        <h1 style="color:#e2e8f0;font-size:1.25rem;font-weight:700;margin:0 0 .3rem;letter-spacing:-.02em">Super Admin</h1>
+        <p style="color:var(--sa-text2);font-size:.82rem;margin:0">HotSpot Manager Platform</p>
       </div>
-      ${errorMsg ? `<div class="sa-alert sa-alert-error">${errorMsg}</div>` : ''}
+      ${errorMsg ? `<div class="sa-alert sa-alert-error">⚠ ${errorMsg}</div>` : ''}
       <form method="POST" action="/sa/login">
         <div class="sa-form-group">
           <label>Username</label>
@@ -229,10 +387,10 @@ sa.get('/sa/login', (c) => {
           <label>Password</label>
           <input type="password" name="password" required placeholder="••••••••" autocomplete="current-password"/>
         </div>
-        <button type="submit" class="sa-btn sa-btn-primary" style="width:100%;justify-content:center;padding:.7rem;font-size:.9rem;margin-top:.5rem">Sign In</button>
+        <button type="submit" class="sa-btn sa-btn-primary" style="width:100%;justify-content:center;padding:.7rem 1rem;font-size:.9rem;margin-top:.5rem;border-radius:10px">Sign In →</button>
       </form>
       <div style="text-align:center;margin-top:1.5rem">
-        <a href="/login" style="color:#94a3b8;font-size:.8rem">← Back to Tenant Login</a>
+        <a href="/login" style="color:var(--sa-text3);font-size:.8rem;text-decoration:none">← Back to Tenant Login</a>
       </div>
     </div>
   </div>`);
