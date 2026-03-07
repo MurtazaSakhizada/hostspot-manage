@@ -304,8 +304,12 @@ export async function handleSubscriptionsGet(db: any, admin: any, url: URL, saSh
       <td style="color:#64748b;font-size:.78rem">${s.payment_method || 'cash'}</td>
       <td style="color:#64748b;font-size:.78rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.payment_note || '—'}</td>
       <td>
-        <button onclick="openRenewModal(${s.company_id},'${s.company_name.replace(/'/g,"\\'")}',${s.plan_id})" 
-                class="sa-btn sa-btn-success sa-btn-sm">🔄 تمدید</button>
+        <div style="display:flex;gap:.35rem;align-items:center">
+          <button onclick="openRenewModal(${s.company_id},'${s.company_name.replace(/\'/g,"\\\\\'")}',${s.plan_id})" 
+                  class="sa-btn sa-btn-success sa-btn-sm">🔄 تمدید</button>
+          <button data-sub-id="${s.id}" onclick="saDeleteSub(${s.id},'${s.company_name.replace(/\'/g,"\\\\\'")}')"
+                  class="sa-btn sa-btn-danger sa-btn-sm" title="حذف اشتراک">🗑️</button>
+        </div>
       </td>
     </tr>`).join('');
 
@@ -365,7 +369,7 @@ export async function handleSubscriptionsGet(db: any, admin: any, url: URL, saSh
         <table class="sa-table">
           <thead><tr>
             <th>شرکت</th><th>پلن</th><th>شروع</th><th>پایان</th>
-            <th>وضعیت</th><th>مبلغ</th><th>روش</th><th>یادداشت</th><th>عملیات</th>
+            <th>وضعیت</th><th>مبلغ</th><th>روش</th><th>یادداشت</th><th style="min-width:140px">عملیات</th>
           </tr></thead>
           <tbody>${rows || '<tr><td colspan="9" style="text-align:center;color:#64748b;padding:2rem">اشتراکی ثبت نشده</td></tr>'}</tbody>
         </table>
@@ -497,6 +501,21 @@ document.addEventListener('DOMContentLoaded', function() {
   const planSel = document.getElementById('new-sub-plan');
   if (planSel) updatePlanPrice(planSel);
 });
+function saDeleteSub(id, companyName) {
+  if (!confirm('حذف اشتراک شرکت "' + companyName + '"?\nاین عملیات قابل بازگشت نیست.')) return;
+  fetch('/sa/api/subscriptions/' + id, { method: 'DELETE' })
+    .then(r => r.json())
+    .then(d => {
+      if (d.success) {
+        const btn = document.querySelector('[data-sub-id="' + id + '"]');
+        if (btn) btn.closest('tr').remove();
+        else location.reload();
+      } else {
+        alert(d.error || 'خطا در حذف اشتراک');
+      }
+    })
+    .catch(() => alert('خطا در اتصال به سرور'));
+}
 </script>`);
 }
 

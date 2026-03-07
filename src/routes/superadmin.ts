@@ -1535,6 +1535,30 @@ sa.post('/sa/subscriptions/add', async (c) => {
 });
 
 // ============================================================
+// SA Delete Subscription
+// ============================================================
+sa.delete('/sa/api/subscriptions/:id', async (c) => {
+  try {
+    const id = parseInt(c.req.param('id'));
+    if (!id) return c.json({ success: false, error: 'Invalid ID' }, 400);
+
+    // Get subscription info before deleting
+    const sub = await c.env.DB.prepare(
+      `SELECT cs.*, c.name as company_name FROM company_subscriptions cs
+       JOIN companies c ON c.id=cs.company_id WHERE cs.id=?`
+    ).bind(id).first<any>();
+
+    if (!sub) return c.json({ success: false, error: 'اشتراک یافت نشد' }, 404);
+
+    await c.env.DB.prepare('DELETE FROM company_subscriptions WHERE id=?').bind(id).run();
+
+    return c.json({ success: true, message: `اشتراک شرکت ${sub.company_name} حذف شد` });
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message }, 500);
+  }
+});
+
+// ============================================================
 // SA Revenue Route
 // ============================================================
 sa.get('/sa/revenue', async (c) => {
