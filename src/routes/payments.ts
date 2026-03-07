@@ -58,7 +58,7 @@ payments.get('/', async (c) => {
     <div class="page-header">
       <div>
         <div class="page-title">💳 ${t(lang,'payments')}</div>
-        ${user.role === 'seller' ? `<div class="page-subtitle" style="font-size:.82rem;color:var(--text-muted)">${lang === 'fa' ? 'پرداخت‌های شما به مالک سیستم' : lang === 'ps' ? 'ستاسو تادیات مالک ته' : 'Your payments to the system owner'}</div>` : ''}
+        ${user.role === 'seller' ? `<div class="page-subtitle" style="font-size:.82rem;color:var(--text-muted)">${t(lang,'your_payments_to_owner')}</div>` : ''}
       </div>
       ${user.role==='owner'?`<a href="/payments/add" class="btn btn-primary">+ ${t(lang,'add_payment')}</a>`:''}
     </div>
@@ -128,7 +128,7 @@ payments.get('/add', async (c) => {
             </select>
           </div>
           <div class="form-group">
-            <label>Amount (؋)</label>
+            <label>${t(lang,'amount')} (؋)</label>
             <input type="number" name="amount" min="0.01" step="0.01" required/>
           </div>
         </div>

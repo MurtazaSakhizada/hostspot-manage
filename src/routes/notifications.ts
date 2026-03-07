@@ -1,13 +1,6 @@
 // ============================================
 // Notifications Routes
 // Mounted at /notifications in index.ts
-// Page:    GET  /notifications           → /notifications/
-// API:     GET  /notifications/count     → badge count
-// API:     GET  /notifications/recent    → dropdown list
-// API:     POST /notifications/read/:id  → mark one read
-// API:     POST /notifications/read-all  → mark all read
-// API:     DELETE /notifications/:id     → delete one
-// API:     DELETE /notifications/clear   → delete all
 // ============================================
 import { Hono } from 'hono';
 import { t, type Lang } from '../lib/i18n';
@@ -98,20 +91,20 @@ notifications.get('/', async (c) => {
     const dt = new Date(d);
     const now = new Date();
     const diff = Math.floor((now.getTime() - dt.getTime()) / 1000);
-    if (diff < 60) return `${diff}s ago`;
-    if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+    if (diff < 60) return `${diff}s`;
+    if (diff < 3600) return `${Math.floor(diff/60)}m`;
+    if (diff < 86400) return `${Math.floor(diff/3600)}h`;
     return dt.toLocaleDateString('en-GB', {day:'2-digit', month:'short'});
   }
 
   const filterTabs = [
-    {key:'all', label:'All'},
-    {key:'unread', label:`Unread${unreadCount>0?` (${unreadCount})`:''}`},
-    {key:'sale', label:'💰 Sales'},
-    {key:'inventory', label:'📦 Inventory'},
-    {key:'allocation', label:'🔀 Allocations'},
-    {key:'payment', label:'💳 Payments'},
-    {key:'system', label:'⚙️ System'},
+    {key:'all',       label: t(lang,'filter_all')},
+    {key:'unread',    label: `${t(lang,'filter_unread')}${unreadCount>0?` (${unreadCount})`:''}`},
+    {key:'sale',      label: t(lang,'filter_sales')},
+    {key:'inventory', label: t(lang,'filter_inventory')},
+    {key:'allocation',label: t(lang,'filter_allocations')},
+    {key:'payment',   label: t(lang,'filter_payments')},
+    {key:'system',    label: t(lang,'filter_system')},
   ];
 
   const tabsHtml = filterTabs.map(tab => `
@@ -123,8 +116,8 @@ notifications.get('/', async (c) => {
   const listHtml = (items.results||[]).length === 0
     ? `<div class="empty-state">
          <div class="empty-state-icon">🔔</div>
-         <h3>No notifications</h3>
-         <p>You're all caught up!</p>
+         <h3>${t(lang,'no_notifications')}</h3>
+         <p>${t(lang,'all_caught_up')}</p>
        </div>`
     : (items.results||[]).map((n: any) => `
       <div class="notif-item ${n.is_read ? '' : 'notif-unread'}" id="notif-${n.id}"
@@ -137,26 +130,26 @@ notifications.get('/', async (c) => {
           <div class="notif-msg">${n.message}</div>
           <div class="notif-meta">
             <span>${fdate(n.created_at)}</span>
-            ${n.link ? `<a href="${n.link}" onclick="event.stopPropagation()" style="color:var(--primary);font-size:.75rem">View →</a>` : ''}
+            ${n.link ? `<a href="${n.link}" onclick="event.stopPropagation()" style="color:var(--primary);font-size:.75rem">${t(lang,'notif_view')}</a>` : ''}
           </div>
         </div>
         <div class="notif-actions">
           ${!n.is_read ? `<div class="notif-dot"></div>` : ''}
-          <button onclick="event.stopPropagation();deleteNotif(${n.id})" class="notif-del-btn" title="Delete">✕</button>
+          <button onclick="event.stopPropagation();deleteNotif(${n.id})" class="notif-del-btn" title="${t(lang,'notif_delete')}">✕</button>
         </div>
       </div>`).join('');
 
   return c.html(pageShell({
-    title: 'Notifications', lang, user, activePage: 'notifications',
+    title: t(lang,'notifications'), lang, user, activePage: 'notifications',
     body: `
     <div class="page-header">
       <div>
-        <div class="page-title">🔔 Notifications</div>
-        <div class="page-subtitle">${unreadCount} unread notification${unreadCount!==1?'s':''}</div>
+        <div class="page-title">${t(lang,'notifications_title')}</div>
+        <div class="page-subtitle">${unreadCount} ${t(lang,'unread_notifications')}</div>
       </div>
       <div class="btn-group">
-        <button onclick="markAllRead()" class="btn btn-outline btn-sm">✓ Mark all read</button>
-        <button onclick="clearAll()" class="btn btn-outline btn-sm" style="color:var(--danger)">🗑 Clear all</button>
+        <button onclick="markAllRead()" class="btn btn-outline btn-sm">✓ ${t(lang,'mark_all_read')}</button>
+        <button onclick="clearAll()" class="btn btn-outline btn-sm" style="color:var(--danger)">${t(lang,'clear_all')}</button>
       </div>
     </div>
 
@@ -227,10 +220,10 @@ notifications.get('/', async (c) => {
       updateNotifBadge();
     }
     async function clearAll() {
-      if(!confirm('Delete all notifications?')) return;
+      if(!confirm('${t(lang,'delete_all_confirm')}')) return;
       await fetch('/notifications/clear', {method:'DELETE'});
       document.getElementById('notif-list').innerHTML =
-        '<div class="empty-state"><div class="empty-state-icon">🔔</div><h3>No notifications</h3><p>You\\'re all caught up!</p></div>';
+        '<div class="empty-state"><div class="empty-state-icon">🔔</div><h3>${t(lang,'no_notifications')}</h3><p>${t(lang,'all_caught_up')}</p></div>';
       updateNotifBadge();
     }
     </script>`

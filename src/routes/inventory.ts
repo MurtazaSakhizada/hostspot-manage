@@ -60,7 +60,7 @@ inventory.get('/', async (c) => {
           <span class="badge badge-primary" style="min-width:80px;text-align:center">${l.pkg_name}</span>
           <span>${l.quantity} × ${l.size_gb}GB</span>
           <span class="text-primary font-bold">= ${formatGB(l.total_gb)}</span>
-          <span style="margin-left:auto" class="text-warning">${formatMoney(l.commission_amount)} ${lang==='fa'?'کمیسیون':lang==='ps'?'کمیشن':'comm.'}</span>
+          <span style="margin-left:auto" class="text-warning">${formatMoney(l.commission_amount)} ${t(lang,'commission_amount')}</span>
         </div>`).join('');
 
       return `
@@ -70,17 +70,17 @@ inventory.get('/', async (c) => {
           <div style="font-size:.75rem;color:var(--text-muted)">${new Date(ab.created_at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div>
         </td>
         <td><strong>${ab.branch_name}</strong></td>
-        <td><span class="badge badge-info">${ab.line_count} ${lang==='fa'?'نوع پکیج':lang==='ps'?'ډول پکیج':'pkg type'}${ab.line_count>1&&lang==='en'?'s':''}</span></td>
+        <td><span class="badge badge-info">${ab.line_count} ${t(lang,'pkg_types')}${ab.line_count>1&&lang==='en'?'s':''}</span></td>
         <td class="text-primary font-bold">${formatGB(ab.total_gb)}</td>
         <td class="text-warning font-bold">${Math.round(ab.commission_rate * 100)}%</td>
         <td style="max-width:200px;color:var(--text-muted);font-size:.82rem">${ab.notes||'—'}</td>
         <td>
-          <button onclick="toggleRow('alloc-inv-${i}')" class="btn btn-outline btn-sm">📋 ${lang==='fa'?'جزئیات':lang==='ps'?'توضیحات':'Details'}</button>
+          <button onclick="toggleRow('alloc-inv-${i}')" class="btn btn-outline btn-sm">📋 ${t(lang,'details')}</button>
         </td>
       </tr>
       <tr id="alloc-inv-${i}" class="hidden">
         <td colspan="7" style="background:var(--gray-50);padding:.875rem 1rem">
-          <div style="font-size:.82rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">📦 ${lang==='fa'?'جزئیات پکیج‌ها':lang==='ps'?'د پکیج توضیحات':'Package Breakdown'}</div>
+          <div style="font-size:.82rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">📦 ${t(lang,'package_breakdown')}</div>
           ${lineRows || `<div style="color:var(--text-muted)">${t(lang,'no_data')}</div>`}
           ${ab.notes?`<div style="margin-top:.5rem;font-size:.82rem"><strong>${t(lang,'notes')}:</strong> ${ab.notes}</div>`:''}
         </td>
@@ -90,7 +90,7 @@ inventory.get('/', async (c) => {
     const emptyRow = `<tr><td colspan="7"><div class="empty-state">
       <div class="empty-state-icon">📦</div>
       <h3>${t(lang,'no_data')}</h3>
-      <p>${lang==='fa'?'هنوز موجودی تخصیص‌یافته‌ای ندارید.':lang==='ps'?'تاسو لا هیڅ تخصیص شوی موجودي نه لرئ.':'No allocated stock yet.'}</p>
+      <p>${t(lang,'no_allocated_stock')}</p>
     </div></td></tr>`;
 
     return c.html(pageShell({
@@ -99,7 +99,7 @@ inventory.get('/', async (c) => {
       <div class="page-header">
         <div>
           <div class="page-title">📦 ${t(lang,'inventory')}</div>
-          <div class="page-subtitle">${lang==='fa'?'موجودی تخصیص‌یافته به شما':lang==='ps'?'ستاسو تخصیص شوې موجودي':'Your Allocated Stock'}</div>
+          <div class="page-subtitle">${t(lang,'your_allocated_stock')}</div>
         </div>
         <a href="/sales/add" class="btn btn-primary">+ ${t(lang,'add_sale')}</a>
       </div>
@@ -108,18 +108,18 @@ inventory.get('/', async (c) => {
       <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:1.25rem">
         <div class="stat-card">
           <div class="stat-card-accent" style="background:#7c3aed"></div>
-          <div class="stat-label">📦 ${lang==='fa'?'مجموع تخصیص‌یافته':lang==='ps'?'ټولټال تخصیص شوي':t(lang,'total_allocated')}</div>
+          <div class="stat-label">📦 ${t(lang,'total_allocated')}</div>
           <div class="stat-value" style="color:#7c3aed">${formatGB(allocatedGb)}</div>
-          <div class="stat-sub">${allocTotals?.batches ?? 0} ${lang==='fa'?'دسته':lang==='ps'?'ډله':'batches'}</div>
+          <div class="stat-sub">${allocTotals?.batches ?? 0} ${t(lang,'batches')}</div>
         </div>
         <div class="stat-card">
           <div class="stat-card-accent" style="background:var(--success)"></div>
-          <div class="stat-label">📤 ${lang==='fa'?'فروخته‌شده':lang==='ps'?'پلورل شوي':t(lang,'total_sold')}</div>
+          <div class="stat-label">📤 ${t(lang,'total_sold')}</div>
           <div class="stat-value success">${formatGB(soldGb)}</div>
         </div>
         <div class="stat-card">
           <div class="stat-card-accent" style="background:var(--primary)"></div>
-          <div class="stat-label">🟢 ${lang==='fa'?'موجود برای فروش':lang==='ps'?'د پلور لپاره موجود':t(lang,'available_gb')}</div>
+          <div class="stat-label">🟢 ${t(lang,'available_gb')}</div>
           <div class="stat-value primary">${formatGB(remainingGb)}</div>
         </div>
       </div>
@@ -127,15 +127,15 @@ inventory.get('/', async (c) => {
       <!-- Allocation Batches Table -->
       <div class="card">
         <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;padding:.875rem 1rem;border-bottom:1px solid var(--border)">
-          <div style="font-weight:600;font-size:.95rem">📋 ${lang==='fa'?'تاریخچه تخصیص‌ها':lang==='ps'?'د تخصیصاتو تاریخچه':'Allocation History'}</div>
-          <div style="font-size:.8rem;color:var(--text-muted)">${lang==='fa'?'هر ردیف = یک دسته تخصیص':lang==='ps'?'هر کتار = یو تخصیص ډله':'Each row = one allocation batch'}</div>
+          <div style="font-weight:600;font-size:.95rem">📋 ${t(lang,'allocation_history')}</div>
+          <div style="font-size:.8rem;color:var(--text-muted)">${t(lang,'each_row_batch')}</div>
         </div>
         <div class="table-wrapper">
           <table>
             <thead><tr>
               <th>${t(lang,'date')}</th>
               <th>${t(lang,'branch')}</th>
-              <th>${lang==='fa'?'پکیج‌ها':lang==='ps'?'پکیجونه':'Packages'}</th>
+              <th>${t(lang,'packages')}</th>
               <th>${t(lang,'total_gb')}</th>
               <th>${t(lang,'commission_rate')}</th>
               <th>${t(lang,'notes')}</th>

@@ -161,10 +161,10 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
     // debt > 0 → seller still owes owner; debt <= 0 → owner owes seller (overpaid)
     const debt = s.alloc_value - s.comm - s.paid;
     const debtLabel = debt > 0
-      ? `<span style="color:var(--danger)">بدهی: ${formatMoney(debt)}</span>`
+      ? `<span style="color:var(--danger)">${t(lang,'debt_label')}: ${formatMoney(debt)}</span>`
       : debt < 0
-      ? `<span style="color:var(--success)">طلب: ${formatMoney(Math.abs(debt))}</span>`
-      : `<span style="color:var(--text-muted)">تسویه</span>`;
+      ? `<span style="color:var(--success)">${t(lang,'credit_label')}: ${formatMoney(Math.abs(debt))}</span>`
+      : `<span style="color:var(--text-muted)">${t(lang,'settled_label')}</span>`;
     return `
     <tr>
       <td><strong>${s.full_name}</strong></td>
@@ -211,7 +211,7 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
   <div class="page-header">
     <div>
       <div class="page-title">📊 ${t(lang,'dashboard')}</div>
-      <div class="page-subtitle">${company?.name ?? ''} · همه وقت</div>
+      <div class="page-subtitle">${company?.name ?? ''} · ${t(lang,'all_time')}</div>
     </div>
     <div class="btn-group">
       <a href="/reports" class="btn btn-outline btn-sm">📋 ${t(lang,'reports')}</a>
@@ -221,25 +221,25 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
 
   <!-- PROFIT FORMULA BANNER -->
   <div style="background:linear-gradient(135deg,var(--primary-dark,#312e81),#1e1b4b);border-radius:12px;padding:1rem 1.25rem;margin-bottom:1.25rem;display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center">
-    <div style="color:#a5b4fc;font-size:.78rem;font-weight:600;white-space:nowrap">💡 فرمول سود</div>
+    <div style="color:#a5b4fc;font-size:.78rem;font-weight:600;white-space:nowrap">${t(lang,'profit_formula')}</div>
     <div style="flex:1;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;font-size:.875rem">
       <span style="color:#f1f5f9">${formatMoney(grossRevenue)}</span>
-      <span style="color:#94a3b8">فروش کل</span>
+      <span style="color:#94a3b8">${t(lang,'gross_income')}</span>
       <span style="color:#94a3b8">−</span>
       <span style="color:#fbbf24">${formatMoney(totalComm)}</span>
-      <span style="color:#94a3b8">کمیشن</span>
+      <span style="color:#94a3b8">${t(lang,'commission_amount')}</span>
       <span style="color:#94a3b8">−</span>
       <span style="color:#f87171">${formatMoney(soldPurchaseCost)}</span>
-      <span style="color:#94a3b8">قیمت خرید</span>
+      <span style="color:#94a3b8">${t(lang,'purchase_cost')}</span>
       <span style="color:#94a3b8">=</span>
       <span style="color:#4ade80;font-weight:700;font-size:1rem">${formatMoney(netProfit)}</span>
-      <span style="color:#4ade80">سود خالص</span>
+      <span style="color:#4ade80">${t(lang,'net_profit_formula')}</span>
       <span style="color:#94a3b8">−</span>
       <span style="color:#fb923c">${formatMoney(totalExpenses)}</span>
-      <span style="color:#94a3b8">مصارف</span>
+      <span style="color:#94a3b8">${t(lang,'expenses')}</span>
       <span style="color:#94a3b8">=</span>
       <span style="color:${availableCapital>=0?'#34d399':'#f87171'};font-weight:700;font-size:1rem">${formatMoney(availableCapital)}</span>
-      <span style="color:${availableCapital>=0?'#34d399':'#f87171'}">سرمایه موجود</span>
+      <span style="color:${availableCapital>=0?'#34d399':'#f87171'}">${t(lang,'available_capital')}</span>
     </div>
   </div>
 
@@ -247,64 +247,64 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
   <div class="stats-grid" style="margin-bottom:1.25rem">
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--primary)"></div>
-      <div class="stat-label">مجموع GB موجودی</div>
+      <div class="stat-label">${t(lang,'total_inventory_gb')}</div>
       <div class="stat-value primary">${formatGB(invBatch?.gb ?? 0)}</div>
-      <div class="stat-sub">${formatGB(stockGb)} باقی‌مانده</div>
+      <div class="stat-sub">${formatGB(stockGb)} ${t(lang,'remaining')}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#7c3aed"></div>
-      <div class="stat-label">GB تخصیص یافته</div>
+      <div class="stat-label">${t(lang,'allocated_gb')}</div>
       <div class="stat-value" style="color:#7c3aed">${formatGB(alloc?.gb ?? 0)}</div>
-      <div class="stat-sub">به فروشندگان</div>
+      <div class="stat-sub">${t(lang,'sellers')}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--success)"></div>
-      <div class="stat-label">GB فروخته شده</div>
+      <div class="stat-label">${t(lang,'sold_gb')}</div>
       <div class="stat-value success">${formatGB(soldGb)}</div>
-      <div class="stat-sub">${sls?.cnt ?? 0} تراکنش</div>
+      <div class="stat-sub">${sls?.cnt ?? 0} ${t(lang,'transactions')}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#0891b2"></div>
-      <div class="stat-label">درآمد ناخالص</div>
+      <div class="stat-label">${t(lang,'gross_income')}</div>
       <div class="stat-value" style="color:#0891b2">${formatMoney(grossRevenue)}</div>
-      <div class="stat-sub">قبل از کسورات</div>
+      <div class="stat-sub">${t(lang,'after_comm_purchase')}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--warning)"></div>
-      <div class="stat-label">کمیشن‌ها</div>
+      <div class="stat-label">${t(lang,'commissions')}</div>
       <div class="stat-value warning">${formatMoney(totalComm)}</div>
-      <div class="stat-sub">کسر از سود (کمیشن)</div>
+      <div class="stat-sub">${t(lang,'deducted_from_profit')}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--danger)"></div>
-      <div class="stat-label">قیمت خرید</div>
+      <div class="stat-label">${t(lang,'purchase_cost')}</div>
       <div class="stat-value" style="color:var(--danger)">${formatMoney(soldPurchaseCost)}</div>
       ${purchasePriceNote}
     </div>
-    <!-- Total Received FROM Sellers (دریافتی از فروشندگان) -->
+    <!-- Total Received FROM Sellers -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#0891b2"></div>
-      <div class="stat-label">💰 مجموع دریافتی</div>
+      <div class="stat-label">💰 ${t(lang,'total_received')}</div>
       <div class="stat-value" style="color:#0891b2">${formatMoney(payTotal?.total ?? 0)}</div>
-      <div class="stat-sub">دریافت شده از فروشندگان</div>
+      <div class="stat-sub">${t(lang,'received_from_sellers')}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--success)"></div>
-      <div class="stat-label">سود خالص</div>
+      <div class="stat-label">${t(lang,'net_profit_card')}</div>
       <div class="stat-value success large">${formatMoney(netProfit)}</div>
-      <div class="stat-sub">بعد از کمیشن + خرید</div>
+      <div class="stat-sub">${t(lang,'after_comm_purchase')}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#f97316"></div>
-      <div class="stat-label">مجموع مصارف</div>
+      <div class="stat-label">${t(lang,'total_expenses')}</div>
       <div class="stat-value" style="color:#f97316">${formatMoney(totalExpenses)}</div>
-      <div class="stat-sub"><a href="/expenses" style="color:var(--primary);font-size:.75rem">مدیریت →</a></div>
+      <div class="stat-sub"><a href="/expenses" style="color:var(--primary);font-size:.75rem">${t(lang,'manage')}</a></div>
     </div>
     <div class="stat-card" style="background:${availableCapital>=0?'linear-gradient(135deg,var(--success-light,#dcfce7),var(--bg-secondary))':'linear-gradient(135deg,#fee2e2,var(--bg-secondary))'}">
       <div class="stat-card-accent" style="background:${availableCapital>=0?'var(--success)':'var(--danger)'}"></div>
-      <div class="stat-label">💎 سرمایه موجود</div>
+      <div class="stat-label">${t(lang,'available_capital_card')}</div>
       <div class="stat-value" style="color:${availableCapital>=0?'var(--success)':'var(--danger)'};font-size:1.35rem">${formatMoney(availableCapital)}</div>
-      <div class="stat-sub">سود خالص − مصارف</div>
+      <div class="stat-sub">${t(lang,'net_profit_minus_expenses')}</div>
     </div>
   </div>
 
@@ -312,22 +312,22 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
   <div style="display:grid;grid-template-columns:1fr 300px;gap:1rem;margin-bottom:1.5rem">
     <div class="card">
       <div class="card-header">
-        <div class="card-title">📈 درآمد — ۷ روز اخیر</div>
+        <div class="card-title">📈 ${t(lang,'gross_income')} — ${t(lang,'days_7')}</div>
         <div style="display:flex;gap:.75rem;font-size:.72rem;color:var(--text-muted)">
-          <span style="color:var(--primary)">● ناخالص</span>
-          <span style="color:var(--success)">● خالص</span>
+          <span style="color:var(--primary)">● ${t(lang,'gross')}</span>
+          <span style="color:var(--success)">● ${t(lang,'net')}</span>
         </div>
       </div>
       <canvas id="revChart" height="120"></canvas>
     </div>
     <div class="card" style="overflow:hidden">
       <div class="card-header">
-        <div class="card-title">💸 مصارف اخیر</div>
-        <a href="/expenses" class="btn btn-outline btn-sm">همه →</a>
+        <div class="card-title">${t(lang,'recent_expenses')}</div>
+        <a href="/expenses" class="btn btn-outline btn-sm">${t(lang,'view_all')}</a>
       </div>
-      ${expRows || `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">💸</div><h3>No expenses</h3></div>`}
+      ${expRows || `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">💸</div><h3>${t(lang,'no_expenses_yet')}</h3></div>`}
       ${totalExpenses>0?`<div style="padding:.75rem 1rem;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-weight:600">
-        <span>مجموع</span><span style="color:var(--danger)">${formatMoney(totalExpenses)}</span>
+        <span>${t(lang,'total')}</span><span style="color:var(--danger)">${formatMoney(totalExpenses)}</span>
       </div>`:''}
     </div>
   </div>
@@ -342,11 +342,11 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
       <table>
         <thead><tr>
           <th>${t(lang,'branch')}</th>
-          <th>GB فروخته</th>
-          <th>ناخالص</th>
-          <th>کمیشن</th>
-          <th>خالص</th>
-          <th>فروشندگان</th>
+          <th>${t(lang,'sold_gb')}</th>
+          <th>${t(lang,'gross')}</th>
+          <th>${t(lang,'commission_amount')}</th>
+          <th>${t(lang,'net')}</th>
+          <th>${t(lang,'sellers')}</th>
         </tr></thead>
         <tbody>${branchRows}</tbody>
       </table>
@@ -356,22 +356,22 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
   <!-- Seller Performance -->
   <div class="card" style="margin-bottom:1rem">
     <div class="card-header">
-      <div class="card-title">👥 عملکرد فروشندگان</div>
-      <a href="/users" class="btn btn-outline btn-sm">مدیریت →</a>
+      <div class="card-title">${t(lang,'seller_performance')}</div>
+      <a href="/users" class="btn btn-outline btn-sm">${t(lang,'manage')}</a>
     </div>
     ${(sellers.results||[]).length ? `
     <div class="table-wrapper">
       <table>
         <thead><tr>
-          <th>فروشنده</th>
-          <th>نرخ کمیشن</th>
-          <th>GB فروخته</th>
-          <th>مجموع فروش</th>
-          <th>کمیشن</th>
-          <th>ارزش تخصیص</th>
-          <th>دریافتی از فروشنده</th>
-          <th>تعداد</th>
-          <th>مانده بدهی</th>
+          <th>${t(lang,'seller')}</th>
+          <th>${t(lang,'commission_rate')}</th>
+          <th>${t(lang,'sold_gb')}</th>
+          <th>${t(lang,'total_gross')}</th>
+          <th>${t(lang,'commission_amount')}</th>
+          <th>${t(lang,'allocation_value')}</th>
+          <th>${t(lang,'total_received')}</th>
+          <th>${t(lang,'quantity')}</th>
+          <th>${t(lang,'debt_balance')}</th>
         </tr></thead>
         <tbody>${sellerRows}</tbody>
       </table>
@@ -381,7 +381,7 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
   <!-- Monthly Trend -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title">📅 روند ماهانه (۶ ماه اخیر)</div>
+      <div class="card-title">${t(lang,'monthly_trend')} (${t(lang,'months_6')})</div>
     </div>
     <div style="padding:.875rem">
       ${monthlyRows || `<div class="empty-state"><div class="empty-state-icon">📅</div><h3>${t(lang,'no_data')}</h3></div>`}
@@ -397,8 +397,8 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
       data:{
         labels:${chartLabels},
         datasets:[
-          {label:'ناخالص',data:${chartGross},backgroundColor:'rgba(99,102,241,.55)',borderColor:'var(--primary)',borderWidth:1.5,borderRadius:4},
-          {label:'خالص',data:${chartNet},backgroundColor:'rgba(34,197,94,.45)',borderColor:'var(--success)',borderWidth:1.5,borderRadius:4}
+          {label:'${t(lang,'gross')}',data:${chartGross},backgroundColor:'rgba(99,102,241,.55)',borderColor:'var(--primary)',borderWidth:1.5,borderRadius:4},
+          {label:'${t(lang,'net')}',data:${chartNet},backgroundColor:'rgba(34,197,94,.45)',borderColor:'var(--success)',borderWidth:1.5,borderRadius:4}
         ]
       },
       options:{
@@ -663,9 +663,9 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
           p.type === 'advance'     ? 'badge-warning' :
           p.type === 'settlement'  ? 'badge-info'    : 'badge-primary'
         }" style="font-size:.72rem">${
-          p.type === 'commission' ? 'کمیشن' :
-          p.type === 'advance'    ? 'پیش‌پرداخت' :
-          p.type === 'settlement' ? 'تسویه' : p.type
+          p.type === 'commission' ? t(lang,'commission_pay') :
+          p.type === 'advance'    ? t(lang,'advance') :
+          p.type === 'settlement' ? t(lang,'settlement') : p.type
         }</span>
       </td>
       <td style="font-size:.82rem">${p.branch_name || '—'}</td>
@@ -679,12 +679,12 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       <td style="font-size:.82rem">${fdate(e.expense_date)}</td>
       <td>
         <span class="badge" style="background:#f43f5e22;color:#f43f5e;border:1px solid #f43f5e44;font-size:.72rem">
-          ${e.category === 'rent' ? '🏠 کرایه' :
-            e.category === 'salary' ? '👤 معاش' :
-            e.category === 'utilities' ? '💡 برق/آب' :
-            e.category === 'maintenance' ? '🔧 ترمیم' :
-            e.category === 'transport' ? '🚗 ترانسپورت' :
-            e.category === 'general' ? '📋 عمومی' : '➕ سایر'}
+          ${e.category === 'rent' ? '🏠 ' + t(lang,'cat_rent') :
+            e.category === 'salary' ? '👤 ' + t(lang,'cat_salary') :
+            e.category === 'utilities' ? '💡 ' + t(lang,'cat_utilities') :
+            e.category === 'maintenance' ? '🔧 ' + t(lang,'cat_maintenance') :
+            e.category === 'transport' ? '🚗 ' + t(lang,'cat_transport') :
+            e.category === 'general' ? '📋 ' + t(lang,'cat_general') : '➕ ' + t(lang,'cat_other')}
         </span>
       </td>
       <td style="font-size:.82rem">${e.title}</td>
@@ -739,23 +739,23 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
     <!-- GB Remaining (available to sell) -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#7c3aed"></div>
-      <div class="stat-label">📦 GB موجود</div>
+      <div class="stat-label">📦 ${t(lang,'available_gb')}</div>
       <div class="stat-value" style="color:#7c3aed">${formatGB(remainingGb)}</div>
-      <div class="stat-sub">تخصیص − فروخته (کل)</div>
+      <div class="stat-sub">${t(lang,'total_allocated')} − ${t(lang,'total_sold')}</div>
     </div>
 
     <!-- GB Sold in period -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--success)"></div>
-      <div class="stat-label">📤 GB فروخته</div>
+      <div class="stat-label">📤 ${t(lang,'sold_gb')}</div>
       <div class="stat-value success">${formatGB(soldPeriod?.gb ?? 0)}</div>
-      <div class="stat-sub">${soldPeriod?.cnt ?? 0} تراکنش · ${periodLabel}</div>
+      <div class="stat-sub">${soldPeriod?.cnt ?? 0} ${t(lang,'transactions')} · ${periodLabel}</div>
     </div>
 
     <!-- Gross Revenue in period -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#0891b2"></div>
-      <div class="stat-label">💵 درآمد کل</div>
+      <div class="stat-label">💵 ${t(lang,'gross_income')}</div>
       <div class="stat-value" style="color:#0891b2">${formatMoney(soldPeriod?.gross ?? 0)}</div>
       <div class="stat-sub">${periodLabel}</div>
     </div>
@@ -763,23 +763,23 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
     <!-- Commission in period -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--warning)"></div>
-      <div class="stat-label">🏷 کمیشن کسب شده</div>
+      <div class="stat-label">🏷 ${t(lang,'commission_earned_lbl')}</div>
       <div class="stat-value warning">${formatMoney(soldPeriod?.comm ?? 0)}</div>
-      <div class="stat-sub">کل: ${formatMoney(allTimeComm)}</div>
+      <div class="stat-sub">${t(lang,'total')}: ${formatMoney(allTimeComm)}</div>
     </div>
 
     <!-- Total Paid by Seller to Owner -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--primary)"></div>
-      <div class="stat-label">💳 مجموع پرداختی</div>
+      <div class="stat-label">💳 ${t(lang,'total_paid_to_owner')}</div>
       <div class="stat-value primary">${formatMoney(totalPaid)}</div>
-      <div class="stat-sub">${paidRow?.cnt ?? 0} پرداخت به سیستم</div>
+      <div class="stat-sub">${paidRow?.cnt ?? 0} ${t(lang,'payments_count')}</div>
     </div>
 
     <!-- Debt/Balance card -->
     <div class="stat-card" style="${balanceBg ? `background:${balanceBg}` : ''}">
       <div class="stat-card-accent" style="background:${balanceColor}"></div>
-      <div class="stat-label">⚖️ بدهی / مانده حساب</div>
+      <div class="stat-label">⚖️ ${t(lang,'debt_balance')}</div>
       <div class="stat-value" style="color:${balanceColor}">${balanceSign}${formatMoney(Math.abs(debt))}</div>
       <div class="stat-sub">${balanceLabel}</div>
     </div>
@@ -787,9 +787,9 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
     <!-- Personal Expenses card (tracking only, NOT affecting debt) -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#f43f5e"></div>
-      <div class="stat-label">💸 مصارف شخصی</div>
+      <div class="stat-label">💸 ${t(lang,'personal_expenses')}</div>
       <div class="stat-value" style="color:#f43f5e">${formatMoney(personalExpTotal)}</div>
-      <div class="stat-sub">${personalExpCnt} مصرف · <a href="/expenses" style="color:var(--primary)">مشاهده →</a></div>
+      <div class="stat-sub">${personalExpCnt} ${t(lang,'expense_type')} · <a href="/expenses" style="color:var(--primary)">${t(lang,'view_all')}</a></div>
     </div>
   </div>
 
@@ -803,9 +803,9 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       <div class="card-header">
         <div class="card-title">📈 فروش‌های من — ۷ روز اخیر</div>
         <div style="display:flex;gap:1rem;font-size:.72rem;color:var(--text-muted)">
-          <span style="color:var(--primary)">● GB فروخته</span>
-          <span style="color:var(--warning)">● کمیشن</span>
-          <span style="color:#0891b2">● کل</span>
+          <span style="color:var(--primary)">● ${t(lang,'sold_gb')}</span>
+          <span style="color:var(--warning)">● ${t(lang,'commission_amount')}</span>
+          <span style="color:#0891b2">● ${t(lang,'total')}</span>
         </div>
       </div>
       <div style="padding:.75rem 1rem 1rem">
@@ -871,9 +871,9 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       </table>
     </div>
     <div style="padding:.75rem 1rem;border-top:1px solid var(--border);display:flex;gap:2rem;font-size:.82rem;flex-wrap:wrap">
-      <span>GB کل فروخته: <strong class="text-primary">${formatGB(allTimeGb)}</strong></span>
-      <span>درآمد کل: <strong style="color:#0891b2">${formatMoney(soldPeriod?.gross??0)}</strong></span>
-      <span>کمیشن: <strong class="text-warning">${formatMoney(soldPeriod?.comm??0)}</strong></span>
+      <span>${t(lang,'total_sold')}: <strong class="text-primary">${formatGB(allTimeGb)}</strong></span>
+      <span>${t(lang,'gross_income')}: <strong style="color:#0891b2">${formatMoney(soldPeriod?.gross??0)}</strong></span>
+      <span>${t(lang,'commission_amount')}: <strong class="text-warning">${formatMoney(soldPeriod?.comm??0)}</strong></span>
     </div>` : `
     <div class="empty-state" style="padding:2.5rem">
       <div class="empty-state-icon">💰</div>
@@ -1042,37 +1042,37 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
   ══════════════════════════════════════════ -->
   <div class="card" style="margin-bottom:1rem">
     <div class="card-header">
-      <div class="card-title">💸 ${lang === 'fa' ? 'مالی خلاصه' : lang === 'ps' ? 'مالي لنډیز' : 'Financial Summary'}</div>
-      <span style="font-size:.75rem;color:var(--text-muted)">${lang === 'fa' ? 'تاریخچه دریافت‌ها' : lang === 'ps' ? 'د تادیاتو تاریخچه' : 'All-time payment history'}</span>
+      <div class="card-title">💸 ${t(lang,'financial_summary')}</div>
+      <span style="font-size:.75rem;color:var(--text-muted)">${t(lang,'payment_history')}</span>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;padding:1rem">
 
       <!-- Commission Earned -->
       <div style="background:linear-gradient(135deg,#fef9c3,var(--bg-secondary));border-radius:10px;padding:1rem;border:1px solid #fde68a">
-        <div style="font-size:.72rem;color:#92400e;font-weight:600;margin-bottom:.4rem">🏷️ ${lang === 'fa' ? 'کمیسیون کسب شده' : lang === 'ps' ? 'ګټل شوی کمیشن' : 'Commission Earned'}</div>
+        <div style="font-size:.72rem;color:#92400e;font-weight:600;margin-bottom:.4rem">🏷️ ${t(lang,'commission_earned_lbl')}</div>
         <div style="font-size:1.4rem;font-weight:700;color:#b45309">${formatMoney(allTimeComm)}</div>
-        <div style="font-size:.72rem;color:#92400e;margin-top:.25rem">${soldAll?.cnt ?? 0} ${lang === 'fa' ? 'فروش' : lang === 'ps' ? 'پلور' : 'sales'}</div>
+        <div style="font-size:.72rem;color:#92400e;margin-top:.25rem">${soldAll?.cnt ?? 0} ${t(lang,'sales_count')}</div>
       </div>
 
       <!-- Total Paid by Seller -->
       <div style="background:linear-gradient(135deg,#dcfce7,var(--bg-secondary));border-radius:10px;padding:1rem;border:1px solid #86efac">
-        <div style="font-size:.72rem;color:#14532d;font-weight:600;margin-bottom:.4rem">💸 ${lang === 'fa' ? 'مجموع پرداختی به مالک' : lang === 'ps' ? 'ټول تادیات مالک ته' : 'Total Paid to Owner'}</div>
+        <div style="font-size:.72rem;color:#14532d;font-weight:600;margin-bottom:.4rem">💸 ${t(lang,'total_paid_to_owner')}</div>
         <div style="font-size:1.4rem;font-weight:700;color:#15803d">${formatMoney(totalPaid)}</div>
-        <div style="font-size:.72rem;color:#14532d;margin-top:.25rem">${paidRow?.cnt ?? 0} ${lang === 'fa' ? 'پرداخت' : lang === 'ps' ? 'تادیه' : 'payments'}</div>
+        <div style="font-size:.72rem;color:#14532d;margin-top:.25rem">${paidRow?.cnt ?? 0} ${t(lang,'payments_count')}</div>
       </div>
 
       <!-- Debt/Balance Due -->
       <div style="background:${debt > 0 ? 'linear-gradient(135deg,#fee2e2,var(--bg-secondary))' : debt < 0 ? 'linear-gradient(135deg,#dcfce7,var(--bg-secondary))' : 'var(--bg-secondary)'};border-radius:10px;padding:1rem;border:1px solid ${debt > 0 ? '#fca5a5' : debt < 0 ? '#86efac' : 'var(--border)'}">
-        <div style="font-size:.72rem;color:${debt > 0 ? '#991b1b' : debt < 0 ? '#14532d' : 'var(--text-muted)'};font-weight:600;margin-bottom:.4rem">⚖️ ${lang === 'fa' ? 'بدهی / مانده حساب' : lang === 'ps' ? 'پور / بیلانس' : 'Debt / Balance'}</div>
+        <div style="font-size:.72rem;color:${debt > 0 ? '#991b1b' : debt < 0 ? '#14532d' : 'var(--text-muted)'};font-weight:600;margin-bottom:.4rem">⚖️ ${t(lang,'debt_balance')}</div>
         <div style="font-size:1.4rem;font-weight:700;color:${balanceColor}">${balanceSign}${formatMoney(Math.abs(debt))}</div>
-        <div style="font-size:.72rem;color:${balanceColor};margin-top:.25rem">${debt > 0 ? (lang === 'fa' ? '⚠️ بدهی به مالک' : lang === 'ps' ? '⚠️ پور مالک ته' : '⚠️ Debt to owner') : debt < 0 ? (lang === 'fa' ? '✅ مالک بدهکار شماست' : lang === 'ps' ? '✅ مالک تاسو ته پور لري' : '✅ Owner owes you') : (lang === 'fa' ? '✓ تسویه شده' : lang === 'ps' ? '✓ تصفیه شوې' : '✓ Settled')}</div>
+        <div style="font-size:.72rem;color:${balanceColor};margin-top:.25rem">${debt > 0 ? t(lang,'debt_to_owner') : debt < 0 ? t(lang,'owner_owes_you') : t(lang,'settled')}</div>
       </div>
     </div>
 
     ${(paymentsByType?.results || []).length ? `
     <!-- Payment Breakdown by Type -->
     <div style="padding:0 1rem 1rem">
-      <div style="font-size:.78rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">${lang === 'fa' ? 'دریافت‌ها بر اساس نوع' : lang === 'ps' ? 'د ډول پر بنسټ تادیات' : 'Payments Breakdown by Type'}</div>
+      <div style="font-size:.78rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">${t(lang,'payments_by_type')}</div>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap">
         ${(paymentsByType?.results || []).map((p: any) => `
           <div style="background:var(--bg-tertiary,var(--bg-secondary));border-radius:8px;padding:.5rem .875rem;border:1px solid var(--border)">

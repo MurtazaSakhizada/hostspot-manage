@@ -1,5 +1,5 @@
 // ============================================
-// Expenses Routes (مصارف)
+// Expenses Routes (مصارف / لګښتونه)
 // GET  /expenses         - list + add form
 // POST /expenses         - create expense
 // POST /expenses/:id     - edit expense
@@ -22,22 +22,23 @@ type Variables = { user: SessionUser; lang: Lang };
 
 const expenses = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-const CATEGORIES = [
-  { key: 'rent',        label: '🏠 کرایه',         color: '#6366f1' },
-  { key: 'salary',      label: '👤 معاش',           color: '#0891b2' },
-  { key: 'utilities',   label: '💡 برق/آب/گاز',     color: '#f59e0b' },
-  { key: 'maintenance', label: '🔧 ترمیم',          color: '#8b5cf6' },
-  { key: 'transport',   label: '🚗 ترانسپورت',       color: '#10b981' },
-  { key: 'general',     label: '📋 عمومی',           color: '#64748b' },
-  { key: 'other',       label: '➕ سایر',            color: '#94a3b8' },
-];
+// Category definitions (key → icon prefix only, label from i18n)
+const CAT_KEYS = ['rent','salary','utilities','maintenance','transport','general','other'];
+const CAT_ICONS: Record<string,string> = {
+  rent: '🏠', salary: '👤', utilities: '💡',
+  maintenance: '🔧', transport: '🚗', general: '📋', other: '➕'
+};
+const CAT_COLORS: Record<string,string> = {
+  rent: '#6366f1', salary: '#0891b2', utilities: '#f59e0b',
+  maintenance: '#8b5cf6', transport: '#10b981', general: '#64748b', other: '#94a3b8'
+};
+const CAT_I18N_KEY: Record<string,any> = {
+  rent: 'cat_rent', salary: 'cat_salary', utilities: 'cat_utilities',
+  maintenance: 'cat_maintenance', transport: 'cat_transport',
+  general: 'cat_general', other: 'cat_other'
+};
 
-function catLabel(k: string) {
-  return CATEGORIES.find(c => c.key === k)?.label ?? k;
-}
-function catColor(k: string) {
-  return CATEGORIES.find(c => c.key === k)?.color ?? '#64748b';
-}
+function catColor(k: string): string { return CAT_COLORS[k] ?? '#64748b'; }
 
 // ── GET /expenses ─────────────────────────────────────────────
 expenses.get('/', async (c) => {
@@ -90,23 +91,29 @@ expenses.get('/', async (c) => {
   ).first<{t:number}>();
   const periodTotal = periodTotalRow?.t ?? 0;
 
-  const catOpts = CATEGORIES.map(c2 =>
-    `<option value="${c2.key}" ${cat===c2.key?'selected':''}>${c2.label}</option>`
-  ).join('');
+  // Category filter buttons
   const catFilterBtns = [
-    {key:'all',label:'همه'},
-    ...CATEGORIES.map(c2=>({key:c2.key,label:c2.label}))
+    {key:'all', label: t(lang,'all')},
+    ...CAT_KEYS.map(k => ({ key: k, label: `${CAT_ICONS[k]} ${t(lang, CAT_I18N_KEY[k] as any)}` }))
   ].map(c2=>`
     <a href="/expenses?from=${from}&to=${to}&cat=${c2.key}"
        class="btn btn-sm ${cat===c2.key?'btn-primary':'btn-outline'}"
        style="white-space:nowrap">${c2.label}</a>
   `).join('');
 
+  // Category select options
+  const catOptsNew = CAT_KEYS.map(k =>
+    `<option value="${k}">${CAT_ICONS[k]} ${t(lang, CAT_I18N_KEY[k] as any)}</option>`
+  ).join('');
+  const catOpts = CAT_KEYS.map(k =>
+    `<option value="${k}" ${cat===k?'selected':''}>${CAT_ICONS[k]} ${t(lang, CAT_I18N_KEY[k] as any)}</option>`
+  ).join('');
+
   const totalRows = (totals.results||[]).map((r:any) => `
     <div style="display:flex;justify-content:space-between;align-items:center;
          padding:.5rem .75rem;border-radius:6px;margin-bottom:.3rem;
          background:${catColor(r.category)}18">
-      <span style="font-size:.875rem">${catLabel(r.category)}</span>
+      <span style="font-size:.875rem">${CAT_ICONS[r.category]??''} ${t(lang, CAT_I18N_KEY[r.category] as any ?? 'cat_other')}</span>
       <span style="font-weight:700;color:${catColor(r.category)}">${formatMoney(r.total)}</span>
     </div>`).join('');
 
@@ -122,7 +129,7 @@ expenses.get('/', async (c) => {
       </td>
       <td>
         <span class="badge" style="background:${catColor(e.category)}22;color:${catColor(e.category)};border:1px solid ${catColor(e.category)}44">
-          ${catLabel(e.category)}
+          ${CAT_ICONS[e.category]??''} ${t(lang, CAT_I18N_KEY[e.category] as any ?? 'cat_other')}
         </span>
       </td>
       <td><strong>${e.title}</strong></td>
@@ -132,7 +139,7 @@ expenses.get('/', async (c) => {
       <td>
         <button onclick="openEditExpense(${e.id},'${e.category}','${e.title.replace(/'/g,"\\'")}',${e.amount},'${e.expense_date}','${(e.notes||'').replace(/'/g,"\\'")}',event)"
           class="btn btn-outline btn-sm">✏️</button>
-        <button onclick="confirmDelete('/api/expenses/${e.id}','این مصرف حذف شود؟')"
+        <button onclick="confirmDelete('/api/expenses/${e.id}','${t(lang,'delete_expense_confirm')}')"
           class="btn btn-danger btn-sm">🗑</button>
       </td>
     </tr>`).join('');
@@ -142,14 +149,10 @@ expenses.get('/', async (c) => {
     <tr><td colspan="${colSpan}">
       <div class="empty-state">
         <div class="empty-state-icon">💸</div>
-        <h3>هنوز مصرفی ثبت نشده</h3>
-        <p>مصارف شخصی خود را ثبت کنید.</p>
+        <h3>${t(lang,'no_expenses_yet')}</h3>
+        <p>${t(lang,'add_expense')}</p>
       </div>
     </td></tr>`;
-
-  const catOptsNew = CATEGORIES.map(c2 =>
-    `<option value="${c2.key}">${c2.label}</option>`
-  ).join('');
 
   // Seller notice banner: expenses are personal, not affecting debt
   const sellerNoticeBanner = !isOwner ? `
@@ -157,23 +160,27 @@ expenses.get('/', async (c) => {
          border-radius:10px;padding:.75rem 1rem;margin-bottom:1rem;display:flex;gap:.75rem;align-items:flex-start">
       <span style="font-size:1.2rem">ℹ️</span>
       <div>
-        <div style="font-weight:700;color:#92400e;font-size:.88rem">مصارف شخصی فروشنده</div>
-        <div style="color:#78350f;font-size:.78rem;margin-top:.2rem">
-          این مصارف <strong>صرفاً برای کنترل شخصی شما</strong> ثبت می‌شود و در محاسبه بدهی یا حساب سیستم
-          تأثیری ندارد. مانده حساب شما فقط بر اساس تخصیص، کمیشن و پرداخت‌ها محاسبه می‌شود.
-        </div>
+        <div style="font-weight:700;color:#92400e;font-size:.88rem">${t(lang,'personal_expenses_title')}</div>
+        <div style="color:#78350f;font-size:.78rem;margin-top:.2rem">${t(lang,'personal_expense_notice')}</div>
       </div>
     </div>` : '';
 
+  const pageTitle = isOwner ? t(lang,'company_expenses_title') : t(lang,'personal_expenses_title');
+  const subtitle = isOwner ? t(lang,'company_expenses') : t(lang,'personal_expenses');
+  const periodInfo = from||to
+    ? `${from||t(lang,'since_beginning')} → ${to||t(lang,'until_today')}`
+    : t(lang,'all_period');
+
   return c.html(pageShell({
-    title: isOwner ? 'مصارف شرکت' : 'مصارف شخصی', lang, user, activePage: 'expenses',
+    title: isOwner ? t(lang,'company_expenses') : t(lang,'personal_expenses'),
+    lang, user, activePage: 'expenses',
     body: `
     <div class="page-header">
       <div>
-        <div class="page-title">${isOwner ? '💸 مصارف شرکت' : '💸 مصارف شخصی'}</div>
-        <div class="page-subtitle">${isOwner ? 'مصارف عملیاتی شرکت' : 'ثبت مصارف شخصی'} · ${from||to ? `${from||'از ابتدا'} → ${to||'امروز'}` : 'همه وقت'}</div>
+        <div class="page-title">${pageTitle}</div>
+        <div class="page-subtitle">${subtitle} · ${periodInfo}</div>
       </div>
-      <button onclick="document.getElementById('add-exp-modal').classList.add('open')" class="btn btn-primary">+ ثبت مصرف</button>
+      <button onclick="document.getElementById('add-exp-modal').classList.add('open')" class="btn btn-primary">+ ${t(lang,'add_expense')}</button>
     </div>
 
     ${sellerNoticeBanner}
@@ -182,21 +189,21 @@ expenses.get('/', async (c) => {
     <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:1.25rem">
       <div class="stat-card">
         <div class="stat-card-accent" style="background:var(--danger)"></div>
-        <div class="stat-label">مجموع مصارف</div>
+        <div class="stat-label">${t(lang,'total_expenses_lbl')}</div>
         <div class="stat-value" style="color:var(--danger)">${formatMoney(grandTotal)}</div>
-        <div class="stat-sub">همه وقت</div>
+        <div class="stat-sub">${t(lang,'all_period')}</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-accent" style="background:var(--warning)"></div>
-        <div class="stat-label">مصارف دوره</div>
+        <div class="stat-label">${t(lang,'period_expenses')}</div>
         <div class="stat-value warning">${formatMoney(periodTotal)}</div>
-        <div class="stat-sub">${from||to?'دوره فلتر شده':'همه وقت'}</div>
+        <div class="stat-sub">${from||to ? t(lang,'filtered_period') : t(lang,'all_period')}</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-accent" style="background:var(--primary)"></div>
-        <div class="stat-label">دسته‌بندی‌ها</div>
+        <div class="stat-label">${t(lang,'categories_count')}</div>
         <div class="stat-value primary">${(totals.results||[]).length}</div>
-        <div class="stat-sub">نوع مصرف</div>
+        <div class="stat-sub">${t(lang,'expense_type')}</div>
       </div>
     </div>
 
@@ -207,16 +214,16 @@ expenses.get('/', async (c) => {
         <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:1rem;align-items:flex-end">
           <form method="GET" action="/expenses" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end">
             <div class="form-group" style="margin:0;min-width:130px">
-              <label style="font-size:.78rem">از تاریخ</label>
+              <label style="font-size:.78rem">${t(lang,'from_date')}</label>
               <input type="date" name="from" value="${from}"/>
             </div>
             <div class="form-group" style="margin:0;min-width:130px">
-              <label style="font-size:.78rem">تا تاریخ</label>
+              <label style="font-size:.78rem">${t(lang,'to_date')}</label>
               <input type="date" name="to" value="${to}"/>
             </div>
             <input type="hidden" name="cat" value="${cat}"/>
-            <button type="submit" class="btn btn-outline btn-sm">فلتر</button>
-            <a href="/expenses" class="btn btn-ghost btn-sm">پاک کردن</a>
+            <button type="submit" class="btn btn-outline btn-sm">${t(lang,'filter')}</button>
+            <a href="/expenses" class="btn btn-ghost btn-sm">${t(lang,'clear_filter')}</a>
           </form>
         </div>
         <div style="display:flex;gap:.35rem;flex-wrap:wrap;margin-bottom:.875rem">${catFilterBtns}</div>
@@ -225,13 +232,13 @@ expenses.get('/', async (c) => {
           <div class="table-wrapper">
             <table>
               <thead><tr>
-                <th>تاریخ</th>
-                <th>دسته‌بندی</th>
-                <th>عنوان</th>
-                <th>مبلغ</th>
-                <th>یادداشت</th>
-                ${isOwner ? '<th>ثبت‌کننده</th>' : ''}
-                <th>عملیات</th>
+                <th>${t(lang,'date')}</th>
+                <th>${t(lang,'expense_category')}</th>
+                <th>${t(lang,'expense_title')}</th>
+                <th>${t(lang,'amount')}</th>
+                <th>${t(lang,'notes')}</th>
+                ${isOwner ? `<th>${t(lang,'expense_recorder')}</th>` : ''}
+                <th>${t(lang,'actions')}</th>
               </tr></thead>
               <tbody>${rows || emptyState}</tbody>
             </table>
@@ -242,12 +249,12 @@ expenses.get('/', async (c) => {
       <!-- Category breakdown sidebar -->
       <div class="card">
         <div class="card-header">
-          <div class="card-title">📊 خلاصه دسته‌بندی</div>
+          <div class="card-title">${t(lang,'expense_categories_summary')}</div>
         </div>
         <div style="padding:.75rem">
-          ${totalRows || '<div style="color:var(--text-muted);text-align:center;padding:1rem;font-size:.85rem">هنوز مصرفی ثبت نشده</div>'}
+          ${totalRows || `<div style="color:var(--text-muted);text-align:center;padding:1rem;font-size:.85rem">${t(lang,'no_expenses_yet')}</div>`}
           ${grandTotal > 0 ? `<div style="border-top:1px solid var(--border);margin-top:.5rem;padding-top:.5rem;display:flex;justify-content:space-between;font-weight:700">
-            <span>مجموع</span><span style="color:var(--danger)">${formatMoney(grandTotal)}</span>
+            <span>${t(lang,'total')}</span><span style="color:var(--danger)">${formatMoney(grandTotal)}</span>
           </div>` : ''}
         </div>
       </div>
@@ -257,35 +264,35 @@ expenses.get('/', async (c) => {
     <div class="modal-overlay" id="add-exp-modal">
       <div class="modal" style="max-width:480px">
         <div class="modal-header">
-          <div class="modal-title">➕ ثبت مصرف ${isOwner ? 'شرکت' : 'شخصی'}</div>
+          <div class="modal-title">➕ ${isOwner ? t(lang,'company_expenses') : t(lang,'personal_expenses')}</div>
           <button onclick="document.getElementById('add-exp-modal').classList.remove('open')" class="modal-close">✕</button>
         </div>
         <form method="POST" action="/expenses">
           <div class="form-row">
             <div class="form-group">
-              <label>دسته‌بندی *</label>
+              <label>${t(lang,'expense_category')} *</label>
               <select name="category" required>${catOptsNew}</select>
             </div>
             <div class="form-group">
-              <label>تاریخ *</label>
+              <label>${t(lang,'date')} *</label>
               <input type="date" name="expense_date" required value="${new Date().toISOString().split('T')[0]}"/>
             </div>
           </div>
           <div class="form-group">
-            <label>عنوان / توضیحات *</label>
-            <input type="text" name="title" required placeholder="مثال: کرایه، ترانسپورت..."/>
+            <label>${t(lang,'description')} *</label>
+            <input type="text" name="title" required placeholder="${t(lang,'description')}..."/>
           </div>
           <div class="form-group">
-            <label>مبلغ (افغانی) *</label>
+            <label>${t(lang,'amount_afn')} *</label>
             <input type="number" name="amount" min="1" step="0.01" required placeholder="0"/>
           </div>
           <div class="form-group">
-            <label>یادداشت (اختیاری)</label>
-            <textarea name="notes" rows="2" placeholder="توضیحات اضافی..."></textarea>
+            <label>${t(lang,'extra_notes')}</label>
+            <textarea name="notes" rows="2" placeholder="${t(lang,'notes')}..."></textarea>
           </div>
           <div class="modal-footer" style="border:none;padding:0;margin-top:1rem">
-            <button type="button" onclick="document.getElementById('add-exp-modal').classList.remove('open')" class="btn btn-outline">لغو</button>
-            <button type="submit" class="btn btn-primary">💾 ذخیره</button>
+            <button type="button" onclick="document.getElementById('add-exp-modal').classList.remove('open')" class="btn btn-outline">${t(lang,'cancel')}</button>
+            <button type="submit" class="btn btn-primary">${t(lang,'save_expense')}</button>
           </div>
         </form>
       </div>
@@ -295,35 +302,35 @@ expenses.get('/', async (c) => {
     <div class="modal-overlay" id="edit-exp-modal">
       <div class="modal" style="max-width:480px">
         <div class="modal-header">
-          <div class="modal-title">✏️ ویرایش مصرف</div>
+          <div class="modal-title">✏️ ${t(lang,'edit_expense')}</div>
           <button onclick="document.getElementById('edit-exp-modal').classList.remove('open')" class="modal-close">✕</button>
         </div>
         <form method="POST" id="edit-exp-form" action="/expenses/0">
           <div class="form-row">
             <div class="form-group">
-              <label>دسته‌بندی *</label>
+              <label>${t(lang,'expense_category')} *</label>
               <select name="category" id="edit-exp-cat" required>${catOpts}</select>
             </div>
             <div class="form-group">
-              <label>تاریخ *</label>
+              <label>${t(lang,'date')} *</label>
               <input type="date" name="expense_date" id="edit-exp-date" required/>
             </div>
           </div>
           <div class="form-group">
-            <label>عنوان *</label>
+            <label>${t(lang,'expense_title')} *</label>
             <input type="text" name="title" id="edit-exp-title" required/>
           </div>
           <div class="form-group">
-            <label>مبلغ (افغانی) *</label>
+            <label>${t(lang,'amount_afn')} *</label>
             <input type="number" name="amount" id="edit-exp-amount" min="1" step="0.01" required/>
           </div>
           <div class="form-group">
-            <label>یادداشت</label>
+            <label>${t(lang,'notes')}</label>
             <textarea name="notes" id="edit-exp-notes" rows="2"></textarea>
           </div>
           <div class="modal-footer" style="border:none;padding:0;margin-top:1rem">
-            <button type="button" onclick="document.getElementById('edit-exp-modal').classList.remove('open')" class="btn btn-outline">لغو</button>
-            <button type="submit" class="btn btn-primary">💾 ذخیره تغییرات</button>
+            <button type="button" onclick="document.getElementById('edit-exp-modal').classList.remove('open')" class="btn btn-outline">${t(lang,'cancel')}</button>
+            <button type="submit" class="btn btn-primary">${t(lang,'save_changes')}</button>
           </div>
         </form>
       </div>
@@ -393,8 +400,6 @@ expenses.post('/:id', async (c) => {
 });
 
 // ── DELETE /api/expenses/:id ─────────────────────────────────
-// Route is /:id (mounted at /expenses, so DELETE /expenses/:id)
-// Also accessible via the global /api/expenses/:id (see index.ts)
 expenses.delete('/:id', async (c) => {
   const user = c.get('user');
   const isOwner = user.role === 'owner';

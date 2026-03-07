@@ -40,11 +40,11 @@ export function pageShell(opts: {
       <i class="icon-file"></i><span>${t(lang, 'reports')}</span>
     </a>
     <a href="/expenses" class="nav-link ${activePage === 'expenses' ? 'active' : ''}">
-      <i class="icon-minus">💸</i><span>${lang === 'fa' ? 'مصارف' : lang === 'ps' ? 'لګښتونه' : 'Expenses'}</span>
+      <i class="icon-minus">💸</i><span>${t(lang, 'expenses')}</span>
     </a>
     ${isOwner ? `
     <a href="/notifications" class="nav-link ${activePage === 'notifications' ? 'active' : ''}" style="position:relative">
-      <i class="icon-bell">🔔</i><span>${lang === 'fa' ? 'اعلانات' : lang === 'ps' ? 'خبرتیاوې' : 'Notifications'}</span>
+      <i class="icon-bell">🔔</i><span>${t(lang, 'notifications')}</span>
     </a>` : ''}
     <a href="/settings" class="nav-link ${activePage === 'settings' ? 'active' : ''}">
       <i class="icon-gear">⚙️</i><span>${t(lang, 'settings')}</span>
@@ -52,7 +52,7 @@ export function pageShell(opts: {
 
     ${isOwner ? `
     <div style="margin:.5rem 1rem .25rem;font-size:.65rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);font-weight:600">
-      ${lang === 'fa' ? 'مدیریت' : lang === 'ps' ? 'مدیریت' : 'Management'}
+      ${t(lang, 'management')}
     </div>
     <a href="/branches" class="nav-link ${activePage === 'branches' ? 'active' : ''}">
       <i class="icon-building"></i><span>${t(lang, 'branches')}</span>
@@ -131,15 +131,15 @@ ${user ? `
           <!-- Dropdown -->
           <div class="notif-dropdown" id="notif-dropdown" style="display:none">
             <div class="notif-drop-header">
-              <span style="font-weight:600;color:var(--text-primary)">Notifications</span>
-              <a href="/notifications" style="font-size:.75rem;color:var(--primary)">View all</a>
+              <span style="font-weight:600;color:var(--text-primary)">${t(lang, 'notif_dropdown_title')}</span>
+              <a href="/notifications" style="font-size:.75rem;color:var(--primary)">${t(lang, 'notif_view_all')}</a>
             </div>
             <div id="notif-drop-list">
-              <div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:.85rem">Loading...</div>
+              <div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:.85rem">${t(lang, 'loading')}</div>
             </div>
             <div class="notif-drop-footer">
-              <button onclick="markAllReadDrop()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:.78rem">✓ Mark all read</button>
-              <a href="/notifications" style="font-size:.78rem;color:var(--primary)">All notifications →</a>
+              <button onclick="markAllReadDrop()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:.78rem">${t(lang, 'notif_mark_all')}</button>
+              <a href="/notifications" style="font-size:.78rem;color:var(--primary)">${t(lang, 'notif_view_all')} →</a>
             </div>
           </div>
         </div>` : ''}
@@ -268,7 +268,7 @@ async function loadNotifDropdown() {
     const res = await fetch('/notifications/recent');
     const data = await res.json();
     if(!data.items || data.items.length===0) {
-      list.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:.85rem">No notifications</div>';
+      list.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:.85rem">${t(lang, 'no_notif_dropdown')}</div>';
       return;
     }
     list.innerHTML = data.items.map(n => \`
@@ -283,7 +283,7 @@ async function loadNotifDropdown() {
       </div>
     \`).join('');
   } catch(e) {
-    list.innerHTML = '<div style="text-align:center;padding:1rem;color:var(--danger);font-size:.82rem">Failed to load</div>';
+    list.innerHTML = '<div style="text-align:center;padding:1rem;color:var(--danger);font-size:.82rem">${t(lang, 'failed_to_load')}</div>';
   }
 }
 async function notifDropClick(id, link) {
