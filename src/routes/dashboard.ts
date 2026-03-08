@@ -7,6 +7,7 @@ import type { SessionUser } from '../lib/auth';
 import { parseCookies } from '../lib/auth';
 import { pageShell } from '../lib/layout';
 import { formatGB, formatMoney } from '../lib/calc';
+import { getCompanyLedgerSummary, getAllSellerBalances, getSellerLedger } from '../lib/ledger';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -1179,15 +1180,231 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
 }
 
 
+// ============================================================
+// FINANCIAL INVESTOR DASHBOARD
+// Mode: financial — shows allocations, payments, balances
+// Focus: GB allocated, price, paid, remain
+// No sales data in this mode
+// ============================================================
+async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang): Promise<string> {
+
+  // ── Company-level ledger summary ───────────────────────────
+  const summary = await getCompanyLedgerSummary(db, user.company_id);
+
+  // ── Per-seller balances from ledger ───────────────────────
+  const sellerBalances = await getAllSellerBalances(db, user.company_id);
+
+  // ── Recent allocations (last 10) ──────────────────────────
+  const recentAllocs = await db.prepare(`
+    SELECT ab.id, ab.created_at, ab.total_gb, ab.total_net,
+           u.full_name as seller_name, br.name as branch_name
+    FROM allocation_batches ab
+    JOIN users u ON u.id = ab.seller_id
+    JOIN branches br ON br.id = ab.branch_id
+    WHERE ab.company_id=?
+    ORDER BY ab.created_at DESC LIMIT 10
+  `).bind(user.company_id).all<any>();
+
+  // ── Recent payments (last 10) ─────────────────────────────
+  const recentPayments = await db.prepare(`
+    SELECT p.id, p.payment_date, p.amount, p.type, p.notes,
+           u.full_name as seller_name
+    FROM payments p
+    JOIN users u ON u.id = p.seller_id
+    WHERE p.company_id=?
+    ORDER BY p.payment_date DESC, p.created_at DESC LIMIT 10
+  `).bind(user.company_id).all<any>();
+
+  // ── remain = total_price - total_paid ────────────────────
+  const remain = summary.total_price - summary.total_paid;
+
+  // ── Seller rows ───────────────────────────────────────────
+  const sellerRows = sellerBalances.map((s: any) => {
+    const pct = s.total_allocated > 0
+      ? Math.min(100, Math.round((s.total_paid / s.total_allocated) * 100))
+      : 0;
+    const balanceColor = s.balance > 0 ? 'var(--danger)' : s.balance < 0 ? 'var(--success)' : 'var(--text-muted)';
+    return `
+    <tr>
+      <td><strong>${s.seller_name}</strong></td>
+      <td class="text-primary font-bold">${formatGB(s.total_gb)}</td>
+      <td>${formatMoney(s.total_allocated)}</td>
+      <td class="text-success font-bold">${formatMoney(s.total_paid)}</td>
+      <td style="color:${balanceColor};font-weight:600">${formatMoney(Math.abs(s.balance))}
+        <span style="font-size:.7rem;color:var(--text-muted)">${s.balance > 0 ? '(بدهی)' : s.balance < 0 ? '(اضافه)' : '(تسویه)'}</span>
+      </td>
+      <td>
+        <div style="background:var(--bg-secondary);border-radius:99px;height:8px;width:80px;overflow:hidden">
+          <div style="background:${pct>=100?'var(--success)':'var(--primary)'};height:100%;width:${pct}%;border-radius:99px"></div>
+        </div>
+        <div style="font-size:.7rem;color:var(--text-muted);margin-top:.2rem">${pct}%</div>
+      </td>
+      <td>
+        <a href="/ledger/seller/${s.seller_id}" class="btn btn-outline btn-sm">📒 دفتر</a>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const recentAllocRows = (recentAllocs.results || []).map((a: any) => `
+    <tr>
+      <td style="font-size:.8rem">${new Date(a.created_at).toLocaleDateString('en-GB')}</td>
+      <td><strong>${a.seller_name}</strong></td>
+      <td>${a.branch_name}</td>
+      <td class="text-primary font-bold">${formatGB(a.total_gb)}</td>
+      <td class="text-success font-bold">${formatMoney(a.total_net)}</td>
+    </tr>`).join('');
+
+  const recentPayRows = (recentPayments.results || []).map((p: any) => `
+    <tr>
+      <td style="font-size:.8rem">${p.payment_date}</td>
+      <td><strong>${p.seller_name}</strong></td>
+      <td><span class="badge badge-${p.type==='settlement'?'success':p.type==='commission'?'warning':'info'}">${p.type}</span></td>
+      <td class="text-success font-bold">${formatMoney(p.amount)}</td>
+      <td style="font-size:.78rem;color:var(--text-muted)">${p.notes||'—'}</td>
+    </tr>`).join('');
+
+  return `
+  <div class="page-header">
+    <div>
+      <div class="page-title">💼 داشبورد مالی سرمایه‌گذار</div>
+      <div class="page-subtitle">Financial Investor Mode · All-time summary</div>
+    </div>
+    <div class="btn-group">
+      <a href="/dashboard?mode=owner" class="btn btn-outline btn-sm">📊 حالت مالک</a>
+      <a href="/allocations" class="btn btn-outline btn-sm">🔀 تخصیص‌ها</a>
+      <a href="/payments" class="btn btn-outline btn-sm">💳 پرداخت‌ها</a>
+    </div>
+  </div>
+
+  <!-- INVESTOR FORMULA BANNER -->
+  <div style="background:linear-gradient(135deg,#0f172a,#1e293b);border-radius:12px;padding:1rem 1.5rem;margin-bottom:1.25rem;border:1px solid #334155">
+    <div style="color:#94a3b8;font-size:.75rem;font-weight:600;margin-bottom:.75rem;letter-spacing:.05em">📐 فرمول مالی: قیمت کل − پرداخت شده = باقی‌مانده</div>
+    <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;font-size:.95rem">
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.7rem">قیمت کل تخصیص</div>
+        <div style="color:#e2e8f0;font-weight:700;font-size:1.2rem">${formatMoney(summary.total_price)}</div>
+      </div>
+      <div style="color:#475569;font-size:1.5rem">−</div>
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.7rem">پرداخت شده</div>
+        <div style="color:#34d399;font-weight:700;font-size:1.2rem">${formatMoney(summary.total_paid)}</div>
+      </div>
+      <div style="color:#475569;font-size:1.5rem">=</div>
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.7rem">باقی‌مانده (بدهی)</div>
+        <div style="color:${remain>0?'#f87171':'#34d399'};font-weight:700;font-size:1.4rem">${formatMoney(Math.abs(remain))}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 KPI CARDS -->
+  <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:1.25rem">
+    <div class="stat-card">
+      <div class="stat-card-accent" style="background:#7c3aed"></div>
+      <div class="stat-label">📦 کل GB تخصیص</div>
+      <div class="stat-value" style="color:#7c3aed">${formatGB(summary.total_gb_allocated)}</div>
+      <div class="stat-sub">total allocated</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-accent" style="background:#0891b2"></div>
+      <div class="stat-label">💰 قیمت کل</div>
+      <div class="stat-value" style="color:#0891b2">${formatMoney(summary.total_price)}</div>
+      <div class="stat-sub">total price</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-accent" style="background:var(--success)"></div>
+      <div class="stat-label">✅ پرداخت شده</div>
+      <div class="stat-value success">${formatMoney(summary.total_paid)}</div>
+      <div class="stat-sub">total geted</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-accent" style="background:${remain>0?'var(--danger)':'var(--success)'}"></div>
+      <div class="stat-label">⏳ باقی‌مانده</div>
+      <div class="stat-value" style="color:${remain>0?'var(--danger)':'var(--success)'}">${formatMoney(Math.abs(remain))}</div>
+      <div class="stat-sub">${remain>0?'بدهی کل':'اضافه پرداخت'}</div>
+    </div>
+  </div>
+
+  <!-- PER-SELLER BALANCES TABLE -->
+  <div class="card" style="margin-bottom:1.25rem">
+    <div class="card-header">
+      <div class="card-title">👥 وضعیت مالی فروشندگان</div>
+      <a href="/ledger" class="btn btn-outline btn-sm">📒 دفتر کل</a>
+    </div>
+    ${sellerBalances.length ? `
+    <div class="table-wrapper">
+      <table>
+        <thead><tr>
+          <th>فروشنده</th>
+          <th>GB تخصیص</th>
+          <th>قیمت</th>
+          <th>پرداختی</th>
+          <th>باقی‌مانده</th>
+          <th>پیشرفت</th>
+          <th>عملیات</th>
+        </tr></thead>
+        <tbody>${sellerRows}</tbody>
+      </table>
+    </div>` : `
+    <div class="empty-state"><div class="empty-state-icon">👥</div><h3>هنوز تخصیصی ثبت نشده</h3></div>`}
+  </div>
+
+  <!-- TWO-COLUMN: RECENT ALLOCATIONS + RECENT PAYMENTS -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
+
+    <!-- Recent Allocations -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🔀 آخرین تخصیص‌ها</div>
+        <a href="/allocations" class="btn btn-outline btn-sm">همه →</a>
+      </div>
+      ${(recentAllocs.results||[]).length ? `
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>تاریخ</th><th>فروشنده</th><th>شعبه</th><th>GB</th><th>خالص</th></tr></thead>
+          <tbody>${recentAllocRows}</tbody>
+        </table>
+      </div>` : `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">🔀</div><h3>بدون تخصیص</h3></div>`}
+    </div>
+
+    <!-- Recent Payments -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">💳 آخرین پرداخت‌ها</div>
+        <a href="/payments" class="btn btn-outline btn-sm">همه →</a>
+      </div>
+      ${(recentPayments.results||[]).length ? `
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>تاریخ</th><th>فروشنده</th><th>نوع</th><th>مبلغ</th><th>یادداشت</th></tr></thead>
+          <tbody>${recentPayRows}</tbody>
+        </table>
+      </div>` : `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">💳</div><h3>بدون پرداخت</h3></div>`}
+    </div>
+  </div>`;
+}
+
+
 // ---- Router ----
 dashboard.get('/', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
   const period = c.req.query('period') ?? 'all';
+  const mode   = c.req.query('mode') ?? '';
 
   let bodyHtml: string;
   if (user.role === 'owner') {
-    bodyHtml = await ownerDashboard(c.env.DB, user, lang);
+    // Check company settings for dashboard_mode
+    const company = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?')
+      .bind(user.company_id).first<{settings:string}>();
+    const settings = JSON.parse(company?.settings || '{}');
+    const dashMode = mode || settings.dashboard_mode || 'owner';
+
+    if (dashMode === 'financial') {
+      bodyHtml = await investorDashboard(c.env.DB, user, lang);
+    } else {
+      bodyHtml = await ownerDashboard(c.env.DB, user, lang);
+    }
   } else {
     bodyHtml = await sellerDashboard(c.env.DB, user, lang, period);
   }

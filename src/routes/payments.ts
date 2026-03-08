@@ -7,6 +7,7 @@ import type { SessionUser } from '../lib/auth';
 import { pageShell } from '../lib/layout';
 import { formatMoney } from '../lib/calc';
 import { createNotification } from './notifications';
+import { createLedgerEntry } from '../lib/ledger';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -182,6 +183,24 @@ payments.post('/', async (c) => {
     title: `💳 ${typeLabels[type]??'Payment'} recorded`,
     message: `${formatMoney(amount)} paid to ${seller?.full_name??'seller'} on ${payment_date}`,
     link: '/payments',
+  });
+
+  // ── Get the inserted payment id for ledger reference ──────
+  const payRow = await c.env.DB.prepare(
+    `SELECT id FROM payments WHERE company_id=? AND seller_id=? ORDER BY created_at DESC LIMIT 1`
+  ).bind(user.company_id, seller_id).first<{id:number}>();
+
+  // ── Create immutable ledger entry (payment reduces debt) ──
+  await createLedgerEntry(c.env.DB, {
+    company_id:       user.company_id,
+    seller_id:        seller_id,
+    transaction_type: 'payment',
+    ref_type:         'payment',
+    ref_id:           payRow?.id,
+    gb_amount:        0,
+    money_amount:     -(Math.round(amount * 100) / 100),  // negative = reduces debt
+    notes:            `${typeLabels[type]??'Payment'} · ${formatMoney(amount)} on ${payment_date}`,
+    created_by:       user.id,
   });
 
   return new Response(null, { status: 302, headers: { 'Location': '/payments' } });

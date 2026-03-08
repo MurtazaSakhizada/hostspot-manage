@@ -588,6 +588,7 @@ admin.get('/settings', async (c) => {
     .bind(user.company_id).first<any>();
   const settings = JSON.parse(company?.settings || '{}');
   const purchasePrice = settings.purchase_price_per_gb ?? '';
+  const dashMode = settings.dashboard_mode ?? 'owner';
 
   const ok  = c.req.query('ok');
   const err = c.req.query('err');
@@ -664,6 +665,47 @@ admin.get('/settings', async (c) => {
           <button type="submit" class="btn btn-primary">💾 Save Company Info</button>
         </form>
       </div>
+    </div>
+
+    <!-- Dashboard Mode Card -->
+    <div class="card" style="max-width:520px;margin-top:1.25rem">
+      <div class="card-header">
+        <div class="card-title">📊 Dashboard Mode</div>
+      </div>
+      <div style="padding:1.25rem">
+        <form method="POST" action="/settings/dashboard-mode">
+          <div class="form-group">
+            <label style="font-weight:600">Investor Dashboard Mode</label>
+            <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.75rem">
+              Choose how the owner dashboard displays data. This does NOT affect any existing data.
+            </div>
+            <div style="display:flex;flex-direction:column;gap:.625rem">
+              <label style="display:flex;align-items:flex-start;gap:.625rem;padding:.75rem;border-radius:10px;border:2px solid ${dashMode==='owner'?'var(--primary)':'var(--border)'};cursor:pointer;background:${dashMode==='owner'?'var(--primary-bg,rgba(99,102,241,.07))':'var(--bg-secondary)'}">
+                <input type="radio" name="dashboard_mode" value="owner" ${dashMode==='owner'?'checked':''} style="margin-top:.15rem"/>
+                <div>
+                  <div style="font-weight:600">🏢 Owner Mode (پیش‌فرض)</div>
+                  <div style="font-size:.78rem;color:var(--text-muted);margin-top:.2rem">نمای کامل کسب‌وکار: فروش، کمیشن، موجودی، سود خالص</div>
+                </div>
+              </label>
+              <label style="display:flex;align-items:flex-start;gap:.625rem;padding:.75rem;border-radius:10px;border:2px solid ${dashMode==='financial'?'var(--primary)':'var(--border)'};cursor:pointer;background:${dashMode==='financial'?'var(--primary-bg,rgba(99,102,241,.07))':'var(--bg-secondary)'}">
+                <input type="radio" name="dashboard_mode" value="financial" ${dashMode==='financial'?'checked':''} style="margin-top:.15rem"/>
+                <div>
+                  <div style="font-weight:600">💼 Financial Investor Mode</div>
+                  <div style="font-size:.78rem;color:var(--text-muted);margin-top:.2rem">تخصیص و پرداخت: GB کل · قیمت کل · پرداختی · باقی‌مانده. بدون داده فروش.</div>
+                </div>
+              </label>
+              <label style="display:flex;align-items:flex-start;gap:.625rem;padding:.75rem;border-radius:10px;border:2px solid ${dashMode==='performance'?'var(--primary)':'var(--border)'};cursor:pointer;background:${dashMode==='performance'?'var(--primary-bg,rgba(99,102,241,.07))':'var(--bg-secondary)'}">
+                <input type="radio" name="dashboard_mode" value="performance" ${dashMode==='performance'?'checked':''} style="margin-top:.15rem"/>
+                <div>
+                  <div style="font-weight:600">📈 Performance Mode</div>
+                  <div style="font-size:.78rem;color:var(--text-muted);margin-top:.2rem">تمرکز بر فروش، عملکرد فروشندگان، روند ماهانه</div>
+                </div>
+              </label>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary" style="margin-top:.875rem">💾 Save Dashboard Mode</button>
+        </form>
+      </div>
     </div>`
   }));
 });
@@ -729,6 +771,25 @@ admin.post('/settings/company-info', async (c) => {
   if (!name) return new Response(null, { status: 302, headers: { 'Location': '/settings?err=invalid' } });
   await c.env.DB.prepare('UPDATE companies SET name=?, default_language=? WHERE id=?')
     .bind(name, lang, user.company_id).run();
+  return new Response(null, { status: 302, headers: { 'Location': '/settings?ok=1' } });
+});
+
+// ── POST /settings/dashboard-mode ────────────────────────────
+admin.post('/settings/dashboard-mode', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.redirect('/dashboard');
+  const form = await c.req.formData();
+  const mode = form.get('dashboard_mode')?.toString() ?? 'owner';
+  const allowed = ['owner', 'financial', 'performance'];
+  if (!allowed.includes(mode)) {
+    return new Response(null, { status: 302, headers: { 'Location': '/settings?err=invalid' } });
+  }
+  const company = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?')
+    .bind(user.company_id).first<{settings:string}>();
+  const settings = JSON.parse(company?.settings || '{}');
+  settings.dashboard_mode = mode;
+  await c.env.DB.prepare('UPDATE companies SET settings=? WHERE id=?')
+    .bind(JSON.stringify(settings), user.company_id).run();
   return new Response(null, { status: 302, headers: { 'Location': '/settings?ok=1' } });
 });
 

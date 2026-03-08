@@ -42,6 +42,9 @@ export function pageShell(opts: {
     <a href="/expenses" class="nav-link ${activePage === 'expenses' ? 'active' : ''}">
       <i class="icon-minus">💸</i><span>${t(lang, 'expenses')}</span>
     </a>
+    <a href="/ledger" class="nav-link ${activePage === 'ledger' ? 'active' : ''}">
+      <i class="icon-ledger">📒</i><span>دفتر مالی</span>
+    </a>
     ${isOwner ? `
     <a href="/notifications" class="nav-link ${activePage === 'notifications' ? 'active' : ''}" style="position:relative">
       <i class="icon-bell">🔔</i><span>${t(lang, 'notifications')}</span>

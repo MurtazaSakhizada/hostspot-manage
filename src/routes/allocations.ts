@@ -7,6 +7,7 @@ import type { SessionUser } from '../lib/auth';
 import { pageShell } from '../lib/layout';
 import { calculate, formatGB, formatMoney } from '../lib/calc';
 import { createNotification } from './notifications';
+import { createLedgerEntry } from '../lib/ledger';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -422,6 +423,20 @@ allocations.post('/', async (c) => {
     title: 'Allocation Recorded',
     message: `${formatGB(round2(totalGb))} allocated to ${sellerRow?.full_name ?? 'seller'} \u00b7 Net: ${formatMoney(round2(totalNet))}`,
     link: '/allocations'
+  });
+
+  // ── Create immutable ledger entry ──────────────────────────
+  // money_amount = totalNet (net amount seller owes owner for this allocation)
+  await createLedgerEntry(c.env.DB, {
+    company_id:       user.company_id,
+    seller_id:        seller_id,
+    transaction_type: 'allocation',
+    ref_type:         'allocation_batch',
+    ref_id:           batch.id,
+    gb_amount:        round2(totalGb),
+    money_amount:     round2(totalNet),
+    notes:            `Allocation batch #${batch.id}: ${formatGB(round2(totalGb))} · Net: ${formatMoney(round2(totalNet))}`,
+    created_by:       user.id,
   });
 
   return new Response(null, { status: 302, headers: { 'Location': '/allocations' } });
