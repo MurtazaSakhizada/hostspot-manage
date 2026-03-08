@@ -420,7 +420,7 @@ sa.post('/sa/login', async (c) => {
     status: 302,
     headers: {
       'Location': '/sa/dashboard',
-      'Set-Cookie': `sa_session=${sessionId}; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=604800`
+      'Set-Cookie': `sa_session=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`
     }
   });
 });
@@ -434,7 +434,7 @@ sa.get('/sa/logout', async (c) => {
     status: 302,
     headers: {
       'Location': '/sa/login',
-      'Set-Cookie': 'sa_session=; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=0'
+      'Set-Cookie': 'sa_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0'
     }
   });
 });

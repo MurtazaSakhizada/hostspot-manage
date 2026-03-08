@@ -65,8 +65,8 @@ export async function handlePlansGet(db: any, admin: any, url: URL, saShell: Fun
       <td><span class="${p.is_active ? 'badge-active' : 'badge-inactive'}">${p.is_active ? 'فعال' : 'غیرفعال'}</span></td>
       <td>
         <div style="display:flex;gap:.35rem">
-          <button onclick="openEditPlan(${JSON.stringify(JSON.stringify(p))})" class="sa-btn sa-btn-ghost sa-btn-sm">✏️ ویرایش</button>
-          <button onclick="saDeletePlan(${p.id},'${p.name}')" class="sa-btn sa-btn-danger sa-btn-sm">🗑️</button>
+          <button data-plan='${JSON.stringify(p).replace(/'/g,"&#39;")}' onclick="openEditPlanBtn(this)" class="sa-btn sa-btn-ghost sa-btn-sm">✏️ ویرایش</button>
+          <button data-plan-id="${p.id}" data-plan-name="${p.name.replace(/"/g,'&quot;')}" onclick="saDeletePlanBtn(this)" class="sa-btn sa-btn-danger sa-btn-sm">🗑️</button>
         </div>
       </td>
     </tr>`;
@@ -222,8 +222,11 @@ export async function handlePlansGet(db: any, admin: any, url: URL, saShell: Fun
   </div>`;
 
   return saShell('Plans', body, `<script>
-function openEditPlan(jsonStr) {
-  const p = JSON.parse(jsonStr);
+function openEditPlanBtn(btn) {
+  const p = JSON.parse(btn.getAttribute('data-plan'));
+  openEditPlan(p);
+}
+function openEditPlan(p) {
   document.getElementById('edit-plan-form').action = '/sa/plans/' + p.id + '/edit';
   document.getElementById('ep-name').value = p.name || '';
   document.getElementById('ep-name-en').value = p.name_en || '';
@@ -235,17 +238,22 @@ function openEditPlan(jsonStr) {
   document.getElementById('ep-sort').value = p.sort_order || 0;
   document.getElementById('ep-active').value = p.is_active ? '1' : '0';
   try {
-    const feats = JSON.parse(p.features || '[]');
-    document.getElementById('ep-features').value = feats.join('\\n');
+    const feats = typeof p.features === 'string' ? JSON.parse(p.features) : (p.features || []);
+    document.getElementById('ep-features').value = Array.isArray(feats) ? feats.join('\n') : '';
   } catch { document.getElementById('ep-features').value = ''; }
   openModal('edit-plan-modal');
+}
+function saDeletePlanBtn(btn) {
+  const id = btn.getAttribute('data-plan-id');
+  const name = btn.getAttribute('data-plan-name');
+  saDeletePlan(id, name);
 }
 function saDeletePlan(id, name) {
   if (!confirm('حذف پلن "' + name + '"؟ اشتراک‌های فعال تحت تأثیر قرار نمی‌گیرند.')) return;
   fetch('/sa/plans/' + id + '/delete', {method:'POST'}).then(r=>r.json()).then(d=>{
     if(d.success) location.href='/sa/plans?ok=d';
     else alert(d.error || 'خطا');
-  });
+  }).catch(() => alert('خطا در اتصال'));
 }
 </script>`);
 }
@@ -305,9 +313,11 @@ export async function handleSubscriptionsGet(db: any, admin: any, url: URL, saSh
       <td style="color:#64748b;font-size:.78rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.payment_note || '—'}</td>
       <td>
         <div style="display:flex;gap:.35rem;align-items:center">
-          <button onclick="openRenewModal(${s.company_id},'${s.company_name.replace(/\'/g,"\\\\\'")}',${s.plan_id})" 
+          <button data-company-id="${s.company_id}" data-company-name="${s.company_name.replace(/"/g,'&quot;')}" data-plan-id="${s.plan_id}"
+                  onclick="openRenewModalBtn(this)"
                   class="sa-btn sa-btn-success sa-btn-sm">🔄 تمدید</button>
-          <button data-sub-id="${s.id}" onclick="saDeleteSub(${s.id},'${s.company_name.replace(/\'/g,"\\\\\'")}')"
+          <button data-sub-id="${s.id}" data-company-name="${s.company_name.replace(/"/g,'&quot;')}"
+                  onclick="saDeleteSubBtn(this)"
                   class="sa-btn sa-btn-danger sa-btn-sm" title="حذف اشتراک">🗑️</button>
         </div>
       </td>
@@ -489,6 +499,12 @@ function updateRenewPrice(sel) {
   const price = PLAN_PRICES[sel.value] || 0;
   document.getElementById('renew-amount').value = price;
 }
+function openRenewModalBtn(btn) {
+  const companyId = btn.getAttribute('data-company-id');
+  const companyName = btn.getAttribute('data-company-name');
+  const planId = btn.getAttribute('data-plan-id');
+  openRenewModal(companyId, companyName, planId);
+}
 function openRenewModal(companyId, companyName, planId) {
   document.getElementById('renew-company-id').value = companyId;
   document.getElementById('renew-company-name').value = companyName;
@@ -501,14 +517,19 @@ document.addEventListener('DOMContentLoaded', function() {
   const planSel = document.getElementById('new-sub-plan');
   if (planSel) updatePlanPrice(planSel);
 });
-function saDeleteSub(id, companyName) {
+function saDeleteSubBtn(btn) {
+  const id = btn.getAttribute('data-sub-id');
+  const companyName = btn.getAttribute('data-company-name');
+  saDeleteSub(id, companyName, btn);
+}
+function saDeleteSub(id, companyName, btn) {
   if (!confirm('حذف اشتراک شرکت "' + companyName + '"?\nاین عملیات قابل بازگشت نیست.')) return;
   fetch('/sa/api/subscriptions/' + id, { method: 'DELETE' })
     .then(r => r.json())
     .then(d => {
       if (d.success) {
-        const btn = document.querySelector('[data-sub-id="' + id + '"]');
-        if (btn) btn.closest('tr').remove();
+        const el = btn || document.querySelector('[data-sub-id="' + id + '"]');
+        if (el) el.closest('tr').remove();
         else location.reload();
       } else {
         alert(d.error || 'خطا در حذف اشتراک');
