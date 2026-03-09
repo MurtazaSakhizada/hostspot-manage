@@ -257,7 +257,7 @@ function openEditPlanBtn(btn) {
   document.getElementById('ep-color').value    = color   || '#4f46e5';
   document.getElementById('ep-sort').value     = sort    || 0;
   document.getElementById('ep-active').value   = active  || '1';
-  document.getElementById('ep-features').value = (features|| '').split('||').join('\n');
+  document.getElementById('ep-features').value = (features|| '').split('||').join('\\n');
   openModal('edit-plan-modal');
 }
 function saDeletePlanBtn(btn) {
@@ -540,7 +540,7 @@ function saDeleteSubBtn(btn) {
   saDeleteSub(id, companyName, btn);
 }
 function saDeleteSub(id, companyName, btn) {
-  if (!confirm('حذف اشتراک شرکت "' + companyName + '"?\nاین عملیات قابل بازگشت نیست.')) return;
+  if (!confirm('حذف اشتراک شرکت "' + companyName + '"?\\nاین عملیات قابل بازگشت نیست.')) return;
   fetch('/sa/api/subscriptions/' + id, { method: 'DELETE', credentials: 'include' })
     .then(r => r.json())
     .then(d => {
