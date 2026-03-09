@@ -271,7 +271,7 @@ ${body}
 // Generic confirm+delete
 function saDelete(url, name, cb) {
   if (!confirm('Delete "' + name + '"? This cannot be undone.')) return;
-  fetch(url, {method:'DELETE'}).then(r=>r.json()).then(d=>{
+  fetch(url, {method:'DELETE', credentials:'include'}).then(r=>r.json()).then(d=>{
     if(d.success) { if(cb) cb(); else location.reload(); }
     else alert(d.error || 'Error occurred');
   }).catch(()=>alert('Network error'));
@@ -280,7 +280,7 @@ function saDelete(url, name, cb) {
 function saToggleCompany(id, name, active) {
   const action = active ? 'deactivate' : 'activate';
   if (!confirm(action.charAt(0).toUpperCase()+action.slice(1)+' company "' + name + '"?')) return;
-  fetch('/sa/api/companies/' + id + '/toggle', {method:'POST'}).then(r=>r.json()).then(d=>{
+  fetch('/sa/api/companies/' + id + '/toggle', {method:'POST', credentials:'include'}).then(r=>r.json()).then(d=>{
     if(d.success) location.reload();
     else alert(d.error || 'Error');
   });

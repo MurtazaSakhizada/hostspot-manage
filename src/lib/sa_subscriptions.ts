@@ -65,8 +65,20 @@ export async function handlePlansGet(db: any, admin: any, url: URL, saShell: Fun
       <td><span class="${p.is_active ? 'badge-active' : 'badge-inactive'}">${p.is_active ? 'فعال' : 'غیرفعال'}</span></td>
       <td>
         <div style="display:flex;gap:.35rem">
-          <button data-plan='${JSON.stringify(p).replace(/'/g,"&#39;")}' onclick="openEditPlanBtn(this)" class="sa-btn sa-btn-ghost sa-btn-sm">✏️ ویرایش</button>
-          <button data-plan-id="${p.id}" data-plan-name="${p.name.replace(/"/g,'&quot;')}" onclick="saDeletePlanBtn(this)" class="sa-btn sa-btn-danger sa-btn-sm">🗑️</button>
+          <button
+            data-pid="${p.id}"
+            data-name="${p.name.replace(/"/g,'&quot;').replace(/'/g,'&#39;')}"
+            data-name-en="${(p.name_en||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}"
+            data-price="${p.price}"
+            data-duration="${p.duration_days}"
+            data-sellers="${p.max_sellers}"
+            data-branches="${p.max_branches}"
+            data-color="${p.color||'#4f46e5'}"
+            data-sort="${p.sort_order||0}"
+            data-active="${p.is_active?'1':'0'}"
+            data-features="${features.join('||').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}"
+            onclick="openEditPlanBtn(this)" class="sa-btn sa-btn-ghost sa-btn-sm">✏️ ویرایش</button>
+          <button data-plan-id="${p.id}" data-plan-name="${p.name.replace(/"/g,'&quot;').replace(/'/g,'&#39;')}" onclick="saDeletePlanBtn(this)" class="sa-btn sa-btn-danger sa-btn-sm">🗑️</button>
         </div>
       </td>
     </tr>`;
@@ -223,37 +235,42 @@ export async function handlePlansGet(db: any, admin: any, url: URL, saShell: Fun
 
   return saShell('Plans', body, `<script>
 function openEditPlanBtn(btn) {
-  const p = JSON.parse(btn.getAttribute('data-plan'));
-  openEditPlan(p);
-}
-function openEditPlan(p) {
-  document.getElementById('edit-plan-form').action = '/sa/plans/' + p.id + '/edit';
-  document.getElementById('ep-name').value = p.name || '';
-  document.getElementById('ep-name-en').value = p.name_en || '';
-  document.getElementById('ep-price').value = p.price || 0;
-  document.getElementById('ep-duration').value = p.duration_days || 30;
-  document.getElementById('ep-sellers').value = p.max_sellers || 5;
-  document.getElementById('ep-branches').value = p.max_branches || 2;
-  document.getElementById('ep-color').value = p.color || '#4f46e5';
-  document.getElementById('ep-sort').value = p.sort_order || 0;
-  document.getElementById('ep-active').value = p.is_active ? '1' : '0';
-  try {
-    const feats = typeof p.features === 'string' ? JSON.parse(p.features) : (p.features || []);
-    document.getElementById('ep-features').value = Array.isArray(feats) ? feats.join('\n') : '';
-  } catch { document.getElementById('ep-features').value = ''; }
+  const id   = btn.getAttribute('data-pid');
+  const name = btn.getAttribute('data-name');
+  const nameEn = btn.getAttribute('data-name-en');
+  const price  = btn.getAttribute('data-price');
+  const duration = btn.getAttribute('data-duration');
+  const sellers  = btn.getAttribute('data-sellers');
+  const branches = btn.getAttribute('data-branches');
+  const color    = btn.getAttribute('data-color');
+  const sort     = btn.getAttribute('data-sort');
+  const active   = btn.getAttribute('data-active');
+  const features = btn.getAttribute('data-features');
+
+  document.getElementById('edit-plan-form').action = '/sa/plans/' + id + '/edit';
+  document.getElementById('ep-name').value     = name    || '';
+  document.getElementById('ep-name-en').value  = nameEn  || '';
+  document.getElementById('ep-price').value    = price   || 0;
+  document.getElementById('ep-duration').value = duration|| 30;
+  document.getElementById('ep-sellers').value  = sellers || 5;
+  document.getElementById('ep-branches').value = branches|| 2;
+  document.getElementById('ep-color').value    = color   || '#4f46e5';
+  document.getElementById('ep-sort').value     = sort    || 0;
+  document.getElementById('ep-active').value   = active  || '1';
+  document.getElementById('ep-features').value = (features|| '').split('||').join('\n');
   openModal('edit-plan-modal');
 }
 function saDeletePlanBtn(btn) {
-  const id = btn.getAttribute('data-plan-id');
+  const id   = btn.getAttribute('data-plan-id');
   const name = btn.getAttribute('data-plan-name');
   saDeletePlan(id, name);
 }
 function saDeletePlan(id, name) {
   if (!confirm('حذف پلن "' + name + '"؟ اشتراک‌های فعال تحت تأثیر قرار نمی‌گیرند.')) return;
-  fetch('/sa/plans/' + id + '/delete', {method:'POST'}).then(r=>r.json()).then(d=>{
+  fetch('/sa/plans/' + id + '/delete', {method:'POST', credentials:'include'}).then(r=>r.json()).then(d=>{
     if(d.success) location.href='/sa/plans?ok=d';
-    else alert(d.error || 'خطا');
-  }).catch(() => alert('خطا در اتصال'));
+    else alert(d.error || 'خطا در حذف پلن');
+  }).catch(() => alert('خطا در اتصال به سرور'));
 }
 </script>`);
 }
@@ -280,7 +297,7 @@ export async function handleSubscriptionsGet(db: any, admin: any, url: URL, saSh
       JOIN subscription_plans p ON p.id=cs.plan_id
       ${whereClause}
       ORDER BY cs.created_at DESC LIMIT 200`).bind(...binds).all<any>(),
-    db.prepare('SELECT id, name, color FROM subscription_plans WHERE is_active=1 ORDER BY sort_order').all<any>(),
+    db.prepare('SELECT id, name, color, price FROM subscription_plans WHERE is_active=1 ORDER BY sort_order').all<any>(),
     db.prepare('SELECT id, name FROM companies ORDER BY name').all<any>(),
   ]);
 
@@ -524,7 +541,7 @@ function saDeleteSubBtn(btn) {
 }
 function saDeleteSub(id, companyName, btn) {
   if (!confirm('حذف اشتراک شرکت "' + companyName + '"?\nاین عملیات قابل بازگشت نیست.')) return;
-  fetch('/sa/api/subscriptions/' + id, { method: 'DELETE' })
+  fetch('/sa/api/subscriptions/' + id, { method: 'DELETE', credentials: 'include' })
     .then(r => r.json())
     .then(d => {
       if (d.success) {
