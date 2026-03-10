@@ -73,10 +73,23 @@ function saShell(title: string, body: string, scripts = ''): string {
     .sa-sidebar{
       width:248px;background:var(--sa-surface);display:flex;flex-direction:column;
       flex-shrink:0;border-right:1px solid var(--sa-border);
-      position:sticky;top:0;height:100vh;overflow-y:auto;scrollbar-width:none;
+      position:fixed;top:0;left:0;height:100vh;overflow-y:auto;scrollbar-width:none;
+      z-index:200;transition:transform .3s cubic-bezier(.4,0,.2,1);
     }
     .sa-sidebar::-webkit-scrollbar{display:none}
-    .sa-sidebar-header{padding:1.25rem 1rem 1.125rem;border-bottom:1px solid var(--sa-border)}
+    .sa-main{margin-left:248px;flex:1;display:flex;flex-direction:column;overflow:auto;min-width:0;background:var(--sa-bg)}
+    .sa-sidebar-header{
+      padding:1.25rem 1rem 1.125rem;border-bottom:1px solid var(--sa-border);
+      display:flex;align-items:center;justify-content:space-between;
+    }
+    .sa-menu-btn{
+      display:none;background:none;border:none;color:var(--sa-text2);
+      font-size:1.25rem;cursor:pointer;padding:.25rem .4rem;border-radius:6px;
+      line-height:1;transition:background .15s;
+    }
+    .sa-menu-btn:hover{background:var(--sa-surface2)}
+    .sa-ham-topbar{display:none}
+    @media(max-width:768px){.sa-ham-topbar{display:block}}
     .sa-brand{display:flex;align-items:center;gap:.625rem;text-decoration:none}
     .sa-brand-icon{
       width:36px;height:36px;
@@ -125,8 +138,7 @@ function saShell(title: string, body: string, scripts = ''): string {
       border:1px solid var(--sa-border);transition:all .15s;
     }
     .sa-logout:hover{background:rgba(239,68,68,.1);color:#fca5a5;border-color:rgba(239,68,68,.3)}
-    /* Main */
-    .sa-main{flex:1;display:flex;flex-direction:column;overflow:auto;min-width:0;background:var(--sa-bg)}
+    /* Main - defined above */
     .sa-topbar{
       background:var(--sa-surface);padding:.875rem 1.5rem;
       border-bottom:1px solid var(--sa-border);
@@ -135,6 +147,30 @@ function saShell(title: string, body: string, scripts = ''): string {
     }
     .sa-topbar-title{color:#e2e8f0;font-size:1rem;font-weight:700;letter-spacing:-.01em}
     .sa-content{flex:1;padding:1.5rem}
+    /* ─── Responsive Mobile ─── */
+    @media(max-width:768px){
+      .sa-sidebar{transform:translateX(-100%)}
+      .sa-sidebar.open{transform:translateX(0)}
+      .sa-main{margin-left:0!important}
+      .sa-menu-btn{display:block}
+      .sa-topbar{padding:.75rem 1rem}
+      .sa-content{padding:1rem .75rem}
+      .sa-topbar-title{font-size:.875rem}
+      .kpi-grid{grid-template-columns:1fr 1fr!important}
+      .sa-form-row{grid-template-columns:1fr!important}
+      .sa-card{overflow-x:auto}
+      .sa-table{min-width:600px}
+      .sa-sidebar-overlay{display:block}
+    }
+    @media(max-width:480px){
+      .kpi-grid{grid-template-columns:1fr 1fr!important}
+      .kpi-value{font-size:1.4rem!important}
+      .sa-topbar{flex-wrap:wrap;gap:.5rem}
+    }
+    .sa-sidebar-overlay{
+      display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);
+      z-index:199;backdrop-filter:blur(2px);
+    }
     /* Cards */
     .sa-card{
       background:var(--sa-surface);border:1px solid var(--sa-border);
@@ -288,6 +324,25 @@ function saToggleCompany(id, name, active) {
 // Open/close modal
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+// SA sidebar toggle
+function toggleSAMenu() {
+  var sb = document.getElementById('sa-sidebar');
+  var ov = document.getElementById('sa-overlay');
+  if (!sb) return;
+  var isOpen = sb.classList.toggle('open');
+  if (ov) ov.style.display = isOpen ? 'block' : 'none';
+  document.body.style.overflow = isOpen ? 'hidden' : '';
+}
+// Add mobile hamburger to topbars
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.sa-topbar').forEach(function(tb) {
+    var btn = document.createElement('button');
+    btn.className = 'sa-menu-btn sa-ham-topbar';
+    btn.innerHTML = '☰';
+    btn.onclick = toggleSAMenu;
+    tb.insertBefore(btn, tb.firstChild);
+  });
+});
 // Live search table
 function liveSearch(inputId, tableBodyId) {
   const inp = document.getElementById(inputId);
@@ -332,7 +387,8 @@ function saNav(active: string, adminName: string): string {
 
   return `
   <div class="sa-layout">
-    <aside class="sa-sidebar">
+    <div class="sa-sidebar-overlay" id="sa-overlay" onclick="toggleSAMenu()"></div>
+    <aside class="sa-sidebar" id="sa-sidebar">
       <div class="sa-sidebar-header">
         <div class="sa-brand">
           <div class="sa-brand-icon">📶</div>
@@ -341,6 +397,7 @@ function saNav(active: string, adminName: string): string {
           </div>
           <span class="sa-brand-badge">SA</span>
         </div>
+        <button class="sa-menu-btn" onclick="toggleSAMenu()" aria-label="Close menu">✕</button>
       </div>
       <nav class="sa-nav">
         ${navHtml}

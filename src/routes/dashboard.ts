@@ -310,7 +310,7 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
   </div>
 
   <!-- Charts + Activity -->
-  <div style="display:grid;grid-template-columns:1fr 300px;gap:1rem;margin-bottom:1.5rem">
+  <div class="dash-chart-row">
     <div class="card">
       <div class="card-header">
         <div class="card-title">📈 ${t(lang,'gross_income')} — ${t(lang,'days_7')}</div>
@@ -797,7 +797,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
   <!-- ══════════════════════════════════════════
        ROW 2 – CHART + MONTHLY TREND
   ══════════════════════════════════════════ -->
-  <div style="display:grid;grid-template-columns:1fr 340px;gap:1rem;margin-bottom:1rem">
+  <div class="dash-chart-row">
 
     <!-- Chart: Last 7 days -->
     <div class="card">
