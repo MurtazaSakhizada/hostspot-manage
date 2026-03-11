@@ -772,7 +772,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
     <!-- Total Paid by Seller to Owner -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--primary)"></div>
-      <div class="stat-label">💳 ${t(lang,'total_paid_to_owner')}</div>
+      <div class="stat-label">💳 ${t(lang,'seller_paid_to_owner')}</div>
       <div class="stat-value primary">${formatMoney(totalPaid)}</div>
       <div class="stat-sub">${paidRow?.cnt ?? 0} ${t(lang,'payments_count')}</div>
     </div>
@@ -1057,7 +1057,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
 
       <!-- Total Paid by Seller -->
       <div style="background:linear-gradient(135deg,#dcfce7,var(--bg-secondary));border-radius:10px;padding:1rem;border:1px solid #86efac">
-        <div style="font-size:.72rem;color:#14532d;font-weight:600;margin-bottom:.4rem">💸 ${t(lang,'total_paid_to_owner')}</div>
+        <div style="font-size:.72rem;color:#14532d;font-weight:600;margin-bottom:.4rem">💸 ${t(lang,'seller_paid_to_owner')}</div>
         <div style="font-size:1.4rem;font-weight:700;color:#15803d">${formatMoney(totalPaid)}</div>
         <div style="font-size:.72rem;color:#14532d;margin-top:.25rem">${paidRow?.cnt ?? 0} ${t(lang,'payments_count')}</div>
       </div>
@@ -1215,8 +1215,24 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
     ORDER BY p.payment_date DESC, p.created_at DESC LIMIT 10
   `).bind(user.company_id).all<any>();
 
+  // ── Company expenses (capital expenditure) ────────────────
+  const expTotalInv = await db.prepare(`
+    SELECT COALESCE(SUM(amount),0) as total FROM expenses
+    WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0)
+  `).bind(user.company_id).first<{total:number}>();
+  const totalExpensesInv = expTotalInv?.total ?? 0;
+
+  // ── Purchase cost (capital invested) ─────────────────────
+  const invCapital = await db.prepare(`
+    SELECT COALESCE(SUM(purchase_cost),0) as total FROM inventory_batches
+    WHERE company_id=?
+  `).bind(user.company_id).first<{total:number}>();
+  const capitalInvested = invCapital?.total ?? 0;
+
   // ── remain = total_price - total_paid ────────────────────
   const remain = summary.total_price - summary.total_paid;
+  // ── Net Capital = total_paid - expenses ──────────────────
+  const netCapital = summary.total_paid - totalExpensesInv;
 
   // ── Seller rows ───────────────────────────────────────────
   const sellerRows = sellerBalances.map((s: any) => {
@@ -1272,13 +1288,13 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
     <div class="btn-group">
       <a href="/dashboard?mode=owner" class="btn btn-outline btn-sm">📊 حالت مالک</a>
       <a href="/allocations" class="btn btn-outline btn-sm">🔀 تخصیص‌ها</a>
-      <a href="/payments" class="btn btn-outline btn-sm">💳 پرداخت‌ها</a>
+      <a href="/payments" class="btn btn-outline btn-sm">💰 دریافتی‌ها</a>
     </div>
   </div>
 
   <!-- INVESTOR FORMULA BANNER -->
   <div style="background:linear-gradient(135deg,#0f172a,#1e293b);border-radius:12px;padding:1rem 1.5rem;margin-bottom:1.25rem;border:1px solid #334155">
-    <div style="color:#94a3b8;font-size:.75rem;font-weight:600;margin-bottom:.75rem;letter-spacing:.05em">📐 فرمول مالی: قیمت کل − پرداخت شده = باقی‌مانده</div>
+    <div style="color:#94a3b8;font-size:.75rem;font-weight:600;margin-bottom:.75rem;letter-spacing:.05em">📐 فرمول مالی: قیمت کل − دریافتی = باقی‌مانده &nbsp;|&nbsp; دریافتی − مصارف = سرمایه موجود</div>
     <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;font-size:.95rem">
       <div style="text-align:center">
         <div style="color:#94a3b8;font-size:.7rem">قیمت کل تخصیص</div>
@@ -1286,7 +1302,7 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
       </div>
       <div style="color:#475569;font-size:1.5rem">−</div>
       <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.7rem">پرداخت شده</div>
+        <div style="color:#94a3b8;font-size:.7rem">دریافتی</div>
         <div style="color:#34d399;font-weight:700;font-size:1.2rem">${formatMoney(summary.total_paid)}</div>
       </div>
       <div style="color:#475569;font-size:1.5rem">=</div>
@@ -1294,10 +1310,25 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
         <div style="color:#94a3b8;font-size:.7rem">باقی‌مانده (بدهی)</div>
         <div style="color:${remain>0?'#f87171':'#34d399'};font-weight:700;font-size:1.4rem">${formatMoney(Math.abs(remain))}</div>
       </div>
+      <div style="color:#334155;font-size:1.5rem;margin:0 .5rem">|</div>
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.7rem">دریافتی</div>
+        <div style="color:#34d399;font-weight:700;font-size:1.2rem">${formatMoney(summary.total_paid)}</div>
+      </div>
+      <div style="color:#475569;font-size:1.5rem">−</div>
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.7rem">مصارف</div>
+        <div style="color:#fb923c;font-weight:700;font-size:1.2rem">${formatMoney(totalExpensesInv)}</div>
+      </div>
+      <div style="color:#475569;font-size:1.5rem">=</div>
+      <div style="text-align:center">
+        <div style="color:#94a3b8;font-size:.7rem">سرمایه موجود</div>
+        <div style="color:${netCapital>=0?'#34d399':'#f87171'};font-weight:700;font-size:1.4rem">${formatMoney(Math.abs(netCapital))}</div>
+      </div>
     </div>
   </div>
 
-  <!-- 4 KPI CARDS -->
+  <!-- 6 KPI CARDS -->
   <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:1.25rem">
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#7c3aed"></div>
@@ -1313,15 +1344,27 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--success)"></div>
-      <div class="stat-label">✅ پرداخت شده</div>
+      <div class="stat-label">✅ دریافتی</div>
       <div class="stat-value success">${formatMoney(summary.total_paid)}</div>
-      <div class="stat-sub">total geted</div>
+      <div class="stat-sub">total received</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:${remain>0?'var(--danger)':'var(--success)'}"></div>
       <div class="stat-label">⏳ باقی‌مانده</div>
       <div class="stat-value" style="color:${remain>0?'var(--danger)':'var(--success)'}">${formatMoney(Math.abs(remain))}</div>
-      <div class="stat-sub">${remain>0?'بدهی کل':'اضافه پرداخت'}</div>
+      <div class="stat-sub">${remain>0?'بدهی کل':'اضافه دریافت'}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-accent" style="background:#f97316"></div>
+      <div class="stat-label">💸 مصارف</div>
+      <div class="stat-value" style="color:#f97316">${formatMoney(totalExpensesInv)}</div>
+      <div class="stat-sub"><a href="/expenses" style="color:var(--primary);font-size:.75rem">مدیریت →</a></div>
+    </div>
+    <div class="stat-card" style="background:${netCapital>=0?'linear-gradient(135deg,#dcfce7,var(--bg-secondary))':'linear-gradient(135deg,#fee2e2,var(--bg-secondary))'}">
+      <div class="stat-card-accent" style="background:${netCapital>=0?'var(--success)':'var(--danger)'}"></div>
+      <div class="stat-label">💎 سرمایه موجود</div>
+      <div class="stat-value" style="color:${netCapital>=0?'var(--success)':'var(--danger)'};font-size:1.2rem">${formatMoney(Math.abs(netCapital))}</div>
+      <div class="stat-sub">دریافتی − مصارف</div>
     </div>
   </div>
 
@@ -1338,7 +1381,7 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
           <th>فروشنده</th>
           <th>GB تخصیص</th>
           <th>قیمت</th>
-          <th>پرداختی</th>
+          <th>دریافتی</th>
           <th>باقی‌مانده</th>
           <th>پیشرفت</th>
           <th>عملیات</th>
@@ -1370,16 +1413,16 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
     <!-- Recent Payments -->
     <div class="card">
       <div class="card-header">
-        <div class="card-title">💳 آخرین پرداخت‌ها</div>
+        <div class="card-title">💰 آخرین دریافتی‌ها</div>
         <a href="/payments" class="btn btn-outline btn-sm">همه →</a>
       </div>
       ${(recentPayments.results||[]).length ? `
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>تاریخ</th><th>فروشنده</th><th>نوع</th><th>مبلغ</th><th>یادداشت</th></tr></thead>
+          <thead><tr><th>تاریخ</th><th>فروشنده</th><th>نوع</th><th>دریافتی</th><th>یادداشت</th></tr></thead>
           <tbody>${recentPayRows}</tbody>
         </table>
-      </div>` : `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">💳</div><h3>بدون پرداخت</h3></div>`}
+      </div>` : `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">💰</div><h3>بدون دریافتی</h3></div>`}
     </div>
   </div>`;
 }

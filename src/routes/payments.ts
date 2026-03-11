@@ -46,8 +46,8 @@ payments.get('/', async (c) => {
       ${user.role==='owner'?`<td><strong>${item.seller_name}</strong></td>`:''}
       <td>${item.branch_name||'—'}</td>
       <td><span class="badge badge-${item.type==='commission'?'warning':item.type==='settlement'?'success':'info'}">${t(lang, item.type as any)}</span></td>
-      <td class="${user.role==='seller'?'font-bold':'text-success font-bold'}" style="${user.role==='seller'?'color:var(--danger)':''}">
-        ${user.role==='seller'?'−':''}${formatMoney(item.amount)}
+      <td class="font-bold" style="color:${user.role==='seller'?'var(--danger)':'var(--success)'};">
+        ${user.role==='seller'?'−':'+ '}${formatMoney(item.amount)}
       </td>
       <td>${item.notes||'—'}</td>
       ${user.role==='owner'?`<td><button onclick="confirmDelete('/api/payments/${item.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button></td>`:''}
@@ -58,8 +58,8 @@ payments.get('/', async (c) => {
     body: `
     <div class="page-header">
       <div>
-        <div class="page-title">💳 ${t(lang,'payments')}</div>
-        ${user.role === 'seller' ? `<div class="page-subtitle" style="font-size:.82rem;color:var(--text-muted)">${t(lang,'your_payments_to_owner')}</div>` : ''}
+        <div class="page-title">💰 ${t(lang,'payments')}</div>
+        ${user.role === 'seller' ? `<div class="page-subtitle" style="font-size:.82rem;color:var(--text-muted)">${t(lang,'your_payments_to_owner')}</div>` : `<div class="page-subtitle" style="font-size:.82rem;color:var(--text-muted)">دریافتی‌های ثبت‌شده از فروشندگان</div>`}
       </div>
       ${user.role==='owner'?`<a href="/payments/add" class="btn btn-primary">+ ${t(lang,'add_payment')}</a>`:''}
     </div>
@@ -67,7 +67,7 @@ payments.get('/', async (c) => {
       ${Object.entries(totalsByType).map(([type, total]) => `
       <div class="stat-card">
         <div class="stat-label">${t(lang, type as any)}</div>
-        <div class="stat-value success">${formatMoney(total)}</div>
+        <div class="stat-value" style="color:#0891b2;font-weight:700">${formatMoney(total)}</div>
       </div>`).join('')}
     </div>
     <div class="card">
@@ -100,7 +100,7 @@ payments.get('/add', async (c) => {
   return c.html(pageShell({
     title: t(lang,'add_payment'), lang, user, activePage: 'payments',
     body: `
-    <div class="page-header"><div class="page-title">💳 ${t(lang,'add_payment')}</div></div>
+    <div class="page-header"><div class="page-title">💰 ${t(lang,'add_payment')}</div></div>
     <div class="card" style="max-width:500px">
       <form method="POST" action="/payments">
         <div class="form-row">

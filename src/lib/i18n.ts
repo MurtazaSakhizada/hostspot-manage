@@ -110,6 +110,11 @@ type TranslationKeys =
   | 'personal_settings' | 'password_changed_success' | 'password_wrong'
   // ── Payments page ─────────────────────────────────────────
   | 'your_payments_to_owner'
+  // ── Investor dashboard ─────────────────────────────────────
+  | 'capital_invested' | 'total_expenses_investor' | 'net_capital'
+  | 'investor_formula_label'
+  // ── Seller payment label ──────────────────────────────────
+  | 'seller_paid_to_owner'
   ;
 
 type Translations = Record<TranslationKeys, string>;
@@ -420,6 +425,12 @@ const en: Translations = {
 
   // Payments
   your_payments_to_owner: 'Your payments to the system owner',
+
+  // Investor dashboard
+  capital_invested: 'Capital Invested',
+  total_expenses_investor: 'Total Expenses',
+  net_capital: 'Net Capital',
+  investor_formula_label: '📐 Investor Formula',
 };
 
 // ── DARI / PERSIAN (fa) ───────────────────────────────────
@@ -439,7 +450,7 @@ const fa: Translations = {
   inventory: 'موجودی',
   allocations: 'تخصیص‌ها',
   sales: 'فروش‌ها',
-  payments: 'پرداخت‌ها',
+  payments: 'دریافتی‌ها',
   reports: 'راپورها',
   expenses: 'مصارف',
   notifications: 'اعلانات',
@@ -520,7 +531,7 @@ const fa: Translations = {
   total_expenses: 'مجموع مصارف',
   all_expenses: 'همه مصارف',
   allocation_value: 'ارزش تخصیص',
-  paid_to_owner: 'پرداختی به مالک',
+  paid_to_owner: 'دریافتی مالک',
   debt_label: 'بدهی',
   credit_label: 'طلب',
   settled_label: 'تسویه',
@@ -559,13 +570,13 @@ const fa: Translations = {
   add_inventory: 'افزودن موجودی',
   add_allocation: 'افزودن تخصیص',
   add_sale: 'ثبت فروش',
-  add_payment: 'ثبت پرداخت',
+  add_payment: 'ثبت دریافتی',
   add_branch: 'افزودن شعبه',
   add_package: 'افزودن پکیج',
   add_seller: 'افزودن فروشنده',
   add_user: 'افزودن کاربر',
 
-  payment_type: 'نوع پرداخت',
+  payment_type: 'نوع دریافتی',
   commission_pay: 'کمیسیون',
   advance: 'پیش‌پرداخت',
   settlement: 'تسویه‌حساب',
@@ -600,24 +611,24 @@ const fa: Translations = {
 
   // Seller dashboard
   financial_summary: 'خلاصه مالی',
-  payment_history: 'تاریخچه دریافت‌ها',
+  payment_history: 'تاریخچه دریافتی‌ها',
   commission_earned_lbl: 'کمیسیون کسب‌شده',
-  total_paid_to_owner: 'مجموع دریافتی به مالک',
+  total_paid_to_owner: 'مجموع دریافتی از فروشندگان',
   debt_balance: 'بدهی / مانده حساب',
-  payments_by_type: 'دریافت‌ها بر اساس نوع',
+  payments_by_type: 'دریافتی‌ها بر اساس نوع',
   debt_to_owner: '⚠️ بدهی به مالک',
   owner_owes_you: '✅ مالک بدهکار شماست',
   settled: '✓ تسویه شده',
   sales_count: 'فروش',
-  payments_count: 'پرداخت',
+  payments_count: 'دریافتی',
   seller_dashboard: 'داشبورد فروشنده',
   register_first_sale: '+ ثبت اولین فروش',
   no_sales_yet: 'هنوز فروشی ثبت نشده',
   no_allocations_yet: 'هنوز تخصیصی ثبت نشده',
-  no_payments_yet: 'هنوز پرداختی ثبت نشده',
+  no_payments_yet: 'هنوز دریافتی ثبت نشده',
   recent_sales: '💰 فروش‌های اخیر',
   stock_allocations: '🔀 تخصیص موجودی',
-  seller_payments: '💳 پرداخت‌های فروشنده به سیستم',
+  seller_payments: '💳 دریافتی‌های مالک از فروشندگان',
   personal_expenses_card: '💸 مصارف شخصی',
   personal_tracking_only: 'این مصارف صرفاً برای کنترل شخصی شما ثبت شده و در محاسبه بدهی یا حساب سیستم تأثیر ندارد.',
   performance_summary: '📊 خلاصه کل عملکرد',
@@ -627,7 +638,7 @@ const fa: Translations = {
   owner_owes_label: 'مالک بدهکار',
   all_sales: 'همه فروش‌ها →',
   all_allocations: 'همه →',
-  all_payments: 'همه پرداخت‌ها →',
+  all_payments: 'همه دریافتی‌ها →',
   all_expenses_link: 'همه مصارف →',
   month: 'ماه',
   txns: 'تراکنش',
@@ -688,7 +699,7 @@ const fa: Translations = {
   filter_sales: '💰 فروش',
   filter_inventory: '📦 موجودی',
   filter_allocations: '🔀 تخصیص',
-  filter_payments: '💳 پرداخت',
+  filter_payments: '💳 دریافتی',
   filter_system: '⚙️ سیستم',
   notif_view: 'مشاهده →',
   notif_delete: 'حذف',
@@ -702,7 +713,7 @@ const fa: Translations = {
   no_notifications: 'اعلانی موجود نیست',
   low_stock_alert: 'هشدار موجودی کم',
   new_sale: 'فروش جدید',
-  payment_received: 'پرداخت دریافت شد',
+  payment_received: 'دریافتی ثبت شد',
 
   // Inventory
   stock_in: 'ورود موجودی',
@@ -727,7 +738,13 @@ const fa: Translations = {
   password_wrong: 'رمز عبور فعلی نادرست است.',
 
   // Payments
-  your_payments_to_owner: 'پرداخت‌های شما به مالک سیستم',
+  your_payments_to_owner: 'دریافتی‌های مالک از شما',
+
+  // Investor dashboard
+  capital_invested: 'سرمایه گذاری شده',
+  total_expenses_investor: 'مجموع مصارف',
+  net_capital: 'سرمایه موجود',
+  investor_formula_label: '📐 فرمول مالی سرمایه‌گذار',
 };
 
 // ── PASHTO (ps) ───────────────────────────────────────────
@@ -1036,6 +1053,15 @@ const ps: Translations = {
 
   // Payments
   your_payments_to_owner: 'ستاسو تادیات مالک ته',
+
+  // Investor dashboard
+  capital_invested: 'پانګه اچونه',
+  total_expenses_investor: 'ټول لګښتونه',
+  net_capital: 'خالص پانګه',
+  investor_formula_label: '📐 د پانګه‌والو مالي فورمول',
+
+  // Seller paid to owner
+  seller_paid_to_owner: 'د مالک ته تادیه',
 };
 
 const translations: Record<Lang, Translations> = { en, fa, ps };

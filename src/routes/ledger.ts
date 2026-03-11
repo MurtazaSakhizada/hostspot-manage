@@ -25,7 +25,7 @@ const ledger = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 // ── helpers ─────────────────────────────────────────────────
 function txBadge(type: string): string {
   if (type === 'allocation') return `<span style="background:rgba(99,102,241,.15);color:#818cf8;padding:2px 8px;border-radius:6px;font-size:.72rem;font-weight:600">📦 تخصیص</span>`;
-  if (type === 'payment')    return `<span style="background:rgba(34,197,94,.15);color:#22c55e;padding:2px 8px;border-radius:6px;font-size:.72rem;font-weight:600">💳 پرداخت</span>`;
+  if (type === 'payment')    return `<span style="background:rgba(34,197,94,.15);color:#22c55e;padding:2px 8px;border-radius:6px;font-size:.72rem;font-weight:600">💰 دریافتی</span>`;
   return `<span style="background:rgba(251,191,36,.15);color:#f59e0b;padding:2px 8px;border-radius:6px;font-size:.72rem;font-weight:600">⚙️ تصحیح</span>`;
 }
 
@@ -104,14 +104,14 @@ ledger.get('/', async (c) => {
       </div>
       <div class="stat-card">
         <div class="stat-card-accent" style="background:var(--success)"></div>
-        <div class="stat-label">✅ پرداخت شده</div>
+        <div class="stat-label">✅ دریافتی</div>
         <div class="stat-value success">${formatMoney(summary.total_paid)}</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-accent" style="background:${remain>0?'var(--danger)':'var(--success)'}"></div>
         <div class="stat-label">⏳ باقی‌مانده</div>
         <div class="stat-value" style="color:${remain>0?'var(--danger)':'var(--success)'}">${formatMoney(Math.abs(remain))}</div>
-        <div class="stat-sub">${remain>0?'کل بدهی فروشندگان':'اضافه‌پرداخت کل'}</div>
+        <div class="stat-sub">${remain>0?'کل بدهی فروشندگان':'اضافه‌دریافتی کل'}</div>
       </div>
     </div>
 
@@ -128,9 +128,9 @@ ledger.get('/', async (c) => {
             <th>فروشنده</th>
             <th>GB تخصیص</th>
             <th>قیمت کل</th>
-            <th>پرداختی</th>
+            <th>دریافتی</th>
             <th>مانده حساب</th>
-            <th>پیشرفت پرداخت</th>
+            <th>پیشرفت دریافتی</th>
             <th>عملیات</th>
           </tr></thead>
           <tbody>${sellerRows}</tbody>
@@ -247,7 +247,7 @@ ledger.get('/seller/:id', async (c) => {
       <div class="btn-group">
         <a href="/ledger" class="btn btn-outline btn-sm">← بازگشت</a>
         <a href="/ledger/seller/${sellerId}/allocations" class="btn btn-outline btn-sm">🔀 تخصیص‌ها</a>
-        <a href="/ledger/seller/${sellerId}/payments" class="btn btn-outline btn-sm">💳 پرداخت‌ها</a>
+        <a href="/ledger/seller/${sellerId}/payments" class="btn btn-outline btn-sm">💰 دریافتی‌ها</a>
       </div>
     </div>
 
@@ -265,7 +265,7 @@ ledger.get('/seller/:id', async (c) => {
       </div>
       <div class="stat-card">
         <div class="stat-card-accent" style="background:var(--success)"></div>
-        <div class="stat-label">✅ پرداخت شده</div>
+        <div class="stat-label">✅ دریافتی</div>
         <div class="stat-value success">${formatMoney(totalPaid)}</div>
       </div>
       <div class="stat-card">
@@ -285,7 +285,7 @@ ledger.get('/seller/:id', async (c) => {
       <span style="color:#475569">قیمت تخصیص</span>
       <span style="color:#475569">−</span>
       <span style="color:#34d399;font-weight:600">${formatMoney(totalPaid)}</span>
-      <span style="color:#475569">پرداخت شده</span>
+      <span style="color:#475569">دریافتی</span>
       <span style="color:#475569">=</span>
       <span style="color:${balColor};font-weight:700;font-size:1rem">${formatMoney(Math.abs(balance))}</span>
       <span style="color:${balColor}">${balance > 0 ? 'بدهی' : balance < 0 ? 'اضافه‌پرداخت' : 'تسویه'}</span>
@@ -376,7 +376,7 @@ ledger.get('/seller/:id/allocations', async (c) => {
       </div>
       <div class="btn-group">
         <a href="/ledger/seller/${sellerId}" class="btn btn-outline btn-sm">📒 دفتر</a>
-        <a href="/ledger/seller/${sellerId}/payments" class="btn btn-outline btn-sm">💳 پرداخت‌ها</a>
+        <a href="/ledger/seller/${sellerId}/payments" class="btn btn-outline btn-sm">💰 دریافتی‌ها</a>
       </div>
     </div>
     <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin-bottom:1rem">
@@ -432,26 +432,26 @@ ledger.get('/seller/:id/payments', async (c) => {
     </tr>`).join('');
 
   return c.html(pageShell({
-    title: `پرداخت‌ها: ${sellerRow.full_name}`, lang, user, activePage: 'ledger',
+    title: `دریافتی‌ها: ${sellerRow.full_name}`, lang, user, activePage: 'ledger',
     body: `
     <div class="page-header">
       <div>
-        <div class="page-title">💳 پرداخت‌های: ${sellerRow.full_name}</div>
+        <div class="page-title">💰 دریافتی‌های: ${sellerRow.full_name}</div>
         <div class="page-subtitle">Payment History</div>
       </div>
       <div class="btn-group">
         <a href="/ledger/seller/${sellerId}" class="btn btn-outline btn-sm">📒 دفتر</a>
         <a href="/ledger/seller/${sellerId}/allocations" class="btn btn-outline btn-sm">🔀 تخصیص‌ها</a>
-        ${user.role==='owner'?`<a href="/payments/add" class="btn btn-primary btn-sm">+ پرداخت جدید</a>`:''}
+        ${user.role==='owner'?`<a href="/payments/add" class="btn btn-primary btn-sm">+ دریافتی جدید</a>`:''}
       </div>
     </div>
     <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:1rem">
       <div class="stat-card">
-        <div class="stat-label">💳 تعداد پرداخت</div>
+        <div class="stat-label">💰 تعداد دریافتی</div>
         <div class="stat-value primary">${(payments.results||[]).length}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">✅ مجموع پرداختی</div>
+        <div class="stat-label">✅ مجموع دریافتی</div>
         <div class="stat-value success">${formatMoney(totalPaid)}</div>
       </div>
     </div>
@@ -461,7 +461,7 @@ ledger.get('/seller/:id/payments', async (c) => {
           <thead><tr>
             <th>تاریخ</th><th>شعبه</th><th>نوع</th><th>مبلغ</th><th>یادداشت</th>
           </tr></thead>
-          <tbody>${payRows || `<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">💳</div><h3>بدون پرداخت</h3></div></td></tr>`}</tbody>
+          <tbody>${payRows || `<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">💰</div><h3>بدون دریافتی</h3></div></td></tr>`}</tbody>
         </table>
       </div>
     </div>`
