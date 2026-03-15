@@ -1,0 +1,40 @@
+{
+  "name": "HotSpot Manager",
+  "short_name": "HotSpot",
+  "description": "مدیریت فروش اینترنت هات‌اسپات",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#1a1f2e",
+  "theme_color": "#4f46e5",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/static/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "categories": ["business", "finance"],
+  "lang": "fa",
+  "dir": "rtl",
+  "shortcuts": [
+    {
+      "name": "داشبورد",
+      "short_name": "داشبورد",
+      "url": "/dashboard",
+      "icons": [{ "src": "/static/logo.svg", "sizes": "any" }]
+    },
+    {
+      "name": "فروش جدید",
+      "short_name": "فروش",
+      "url": "/sales",
+      "icons": [{ "src": "/static/logo.svg", "sizes": "any" }]
+    }
+  ]
+}

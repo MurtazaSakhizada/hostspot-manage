@@ -29,6 +29,8 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // ---- Static Files ----
 app.use('/static/*', serveStatic({ root: './' }));
+// Serve manifest.json
+app.get('/manifest.json', serveStatic({ root: './', path: '/public/manifest.json' }));
 // Also serve files from public root
 app.get('/favicon.svg', (c) => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">

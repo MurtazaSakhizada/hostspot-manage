@@ -43,7 +43,10 @@ function saShell(title: string, body: string, scripts = ''): string {
 <html lang="en" dir="ltr">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="theme-color" content="#0d1117"/>
   <title>${title} — Super Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -367,6 +370,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 ${scripts}
+<script src="/static/mobile.js"></script>
 </body>
 </html>`;
 }

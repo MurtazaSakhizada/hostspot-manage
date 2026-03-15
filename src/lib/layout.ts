@@ -76,13 +76,18 @@ export function pageShell(opts: {
 <html lang="${lang}" dir="${dir}">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+  <meta name="theme-color" content="#4f46e5"/>
   <title>${title} — ${t(lang, 'app_name')}</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
   <link rel="shortcut icon" href="/favicon.svg"/>
   <link rel="apple-touch-icon" href="/static/logo.svg"/>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="manifest" href="/manifest.json"/>
   <link rel="stylesheet" href="/static/style.css"/>
   <link rel="stylesheet" href="/static/splash.css"/>
   ${extraHead}
@@ -318,6 +323,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 ${scripts}
+<script src="/static/mobile.js"></script>
 </body>
 </html>`;
 }
