@@ -21,6 +21,7 @@ import superAdminRoutes from './routes/superadmin';
 import notificationsRoutes from './routes/notifications';
 import expensesRoutes from './routes/expenses';
 import ledgerRoutes from './routes/ledger';
+import mobileRoutes from './routes/mobile';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -66,6 +67,7 @@ app.use('*', async (c, next) => {
   // Always allow public paths, static files, and super admin paths
   if (path.startsWith('/static') || path.startsWith('/favicon') ||
       path.startsWith('/sa/') || path === '/sa' ||
+      path.startsWith('/mobile/') ||
       PUBLIC_PATHS.some(p => path === p || path.startsWith(p))) {
     return next();
   }
@@ -108,6 +110,7 @@ app.route('/reports', reportsRoutes);
 app.route('/notifications', notificationsRoutes);
 app.route('/expenses', expensesRoutes);
 app.route('/ledger', ledgerRoutes);
+app.route('/mobile', mobileRoutes);
 app.route('/', adminRoutes);
 
 // ---- API: Delete endpoints (re-mount under app root) ----
