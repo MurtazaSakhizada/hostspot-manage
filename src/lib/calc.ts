@@ -68,7 +68,7 @@ function round2(n: number): number {
 
 // Format numbers for display
 export function formatGB(n: number): string {
-  if (n >= 1000) return (n / 1000).toFixed(1) + ' TB';
+  // Always show in GB - never convert to TB
   return n.toFixed(n % 1 === 0 ? 0 : 2) + ' GB';
 }
 

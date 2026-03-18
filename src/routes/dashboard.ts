@@ -44,11 +44,13 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
            COALESCE(SUM(purchase_cost),0) as purchase_cost
     FROM inventory_batches WHERE company_id=?`).bind(user.company_id).first<any>();
 
-  // ── Allocations ──────────────────────────────────────────
+  // ── Allocations — use allocation_batches (source of truth, NOT old allocations table)
   const alloc = await db.prepare(`
-    SELECT COALESCE(SUM(total_gb),0) as gb,
-           COALESCE(SUM(gross_amount),0) as gross
-    FROM allocations WHERE company_id=?`).bind(user.company_id).first<any>();
+    SELECT COALESCE(SUM(total_gb),0)         as gb,
+           COALESCE(SUM(total_gross),0)      as gross,
+           COALESCE(SUM(total_commission),0) as commission,
+           COALESCE(SUM(total_net),0)        as net
+    FROM allocation_batches WHERE company_id=?`).bind(user.company_id).first<any>();
 
   // ── Expenses (COMPANY ONLY: seller_id IS NULL) ──────────────
   // Seller personal expenses are EXCLUDED from owner profit/capital
@@ -63,32 +65,25 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
     .bind(user.company_id).first<{total:number}>();
 
   // ── Formula calculations ──────────────────────────────────
-  const grossRevenue    = sls?.gross ?? 0;
-  const totalComm       = sls?.comm  ?? 0;
-  // Purchase cost: from inventory_batches (recorded at entry time)
-  const purchaseCost    = invBatch?.purchase_cost ?? 0;
-  // If no purchase cost in batches yet, calculate from total GB × company price
-  const effectivePurchaseCost = purchaseCost > 0
-    ? purchaseCost
-    : (purchasePricePerGb > 0 ? (invBatch?.gb ?? 0) * purchasePricePerGb : 0);
-
-  // Net Profit = Gross Revenue - Commissions - Purchase Cost (of sold stock)
-  // We calculate purchase cost of SOLD GB (not all inventory)
   const soldGb = sls?.gb ?? 0;
-  const soldPurchaseCost = purchasePricePerGb > 0
-    ? soldGb * purchasePricePerGb
-    : (invBatch?.gb > 0 && invBatch?.purchase_cost > 0
-      ? (soldGb / (invBatch?.gb || 1)) * purchaseCost
+  const allocGb = alloc?.gb ?? 0;
+  const purchaseCost = invBatch?.purchase_cost ?? 0;
+
+  // Purchase cost of ALL allocated GB × price per GB
+  const allocPurchaseCost = purchasePricePerGb > 0
+    ? Math.round(allocGb * purchasePricePerGb * 100) / 100
+    : (purchaseCost > 0 && invBatch?.gb > 0
+      ? Math.round((allocGb / (invBatch?.gb || 1)) * purchaseCost * 100) / 100
       : 0);
-  const netProfit = grossRevenue - totalComm - soldPurchaseCost;
 
-  // Available Capital = Net Profit - Expenses
-  const totalExpenses   = expTotal?.total ?? 0;
-  const availableCapital = netProfit - totalExpenses;
+  const totalExpenses      = expTotal?.total ?? 0;
+  const totalPaidBySellers = payTotal?.total ?? 0;
 
-  // Stock value remaining
+  // Available Capital = دریافتی از فروشندگان − پول خرید (تخصیص‌شده) − مصارف
+  const availableCapital = totalPaidBySellers - allocPurchaseCost - totalExpenses;
+
+  // Stock GB remaining
   const stockGb = (invBatch?.gb ?? 0) - soldGb;
-  const stockValue = purchasePricePerGb > 0 ? stockGb * purchasePricePerGb : 0;
 
   // ── Branch drill-down ────────────────────────────────────
   const branches = await db.prepare(`
@@ -119,42 +114,7 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
     GROUP BY u.id, u.full_name, u.commission_rate ORDER BY sold_gb DESC`)
     .bind(user.company_id).all<any>();
 
-  // ── Monthly trend (last 6 months) ───────────────────────
-  const monthly = await db.prepare(`
-    SELECT strftime('%Y-%m', snapshot_time) as month,
-      COALESCE(SUM(total_gb),0) as gb,
-      COALESCE(SUM(gross_amount),0) as gross,
-      COALESCE(SUM(commission_amount),0) as comm,
-      COALESCE(SUM(net_amount),0) as net
-    FROM sales WHERE company_id=?
-    GROUP BY month ORDER BY month DESC LIMIT 6`).bind(user.company_id).all<any>();
 
-  // ── Recent expenses (COMPANY ONLY: seller_id IS NULL) ──────
-  const recentExp = await db.prepare(`
-    SELECT category, title, amount, expense_date
-    FROM expenses WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0)
-    ORDER BY expense_date DESC, created_at DESC LIMIT 5`)
-    .bind(user.company_id).all<any>();
-
-  // ── Chart labels (last 7 days) ────────────────────────────
-  const chart7 = await db.prepare(`
-    SELECT strftime('%Y-%m-%d', snapshot_time) as day,
-      COALESCE(SUM(gross_amount),0) as rev,
-      COALESCE(SUM(net_amount),0) as net,
-      COUNT(*) as cnt
-    FROM sales WHERE company_id=? AND snapshot_time >= datetime('now','-7 days')
-    GROUP BY day ORDER BY day ASC`).bind(user.company_id).all<any>();
-
-  const days7: string[] = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate() - i);
-    days7.push(d.toISOString().split('T')[0]);
-  }
-  const chartMap7 = Object.fromEntries((chart7.results||[]).map((r:any)=>[r.day,r]));
-  const chartLabels = JSON.stringify(days7.map(d=>new Date(d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric'})));
-  const chartGross = JSON.stringify(days7.map(d=>Math.round(chartMap7[d]?.rev??0)));
-  const chartNet   = JSON.stringify(days7.map(d=>Math.round(chartMap7[d]?.net??0)));
-  const chartCnt   = JSON.stringify(days7.map(d=>chartMap7[d]?.cnt??0));
 
   // ── HTML building ─────────────────────────────────────────
   const sellerRows = (sellers.results||[]).map((s: any) => {
@@ -190,24 +150,6 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
       <td>${b.sellers}</td>
     </tr>`).join('');
 
-  const monthlyRows = (monthly.results||[]).map((m: any) => `
-    <div class="summary-row">
-      <span class="summary-label">${m.month}</span>
-      <span class="summary-value gb">${formatGB(m.gb)}</span>
-      <span class="summary-value money">${formatMoney(m.net)}</span>
-    </div>`).join('');
-
-  const expRows = (recentExp.results||[]).map((e:any) => `
-    <div class="summary-row">
-      <span class="summary-label">${e.title}</span>
-      <span style="font-size:.78rem;color:var(--text-muted)">${e.expense_date}</span>
-      <span class="summary-value" style="color:var(--danger)">−${formatMoney(e.amount)}</span>
-    </div>`).join('');
-
-  const purchasePriceNote = purchasePricePerGb > 0
-    ? `<div style="font-size:.78rem;color:var(--text-muted);margin-top:.2rem">@ ${formatMoney(purchasePricePerGb)}/GB</div>`
-    : `<div style="font-size:.75rem;color:var(--warning);margin-top:.2rem">⚠️ <a href="/settings" style="color:var(--warning)">Set purchase price</a></div>`;
-
   return `
   <div class="page-header">
     <div>
@@ -220,116 +162,49 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
     </div>
   </div>
 
-  <!-- PROFIT FORMULA BANNER -->
-  <div style="background:linear-gradient(135deg,var(--primary-dark,#312e81),#1e1b4b);border-radius:12px;padding:1rem 1.25rem;margin-bottom:1.25rem;display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center">
-    <div style="color:#a5b4fc;font-size:.78rem;font-weight:600;white-space:nowrap">${t(lang,'profit_formula')}</div>
-    <div style="flex:1;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;font-size:.875rem">
-      <span style="color:#f1f5f9">${formatMoney(grossRevenue)}</span>
-      <span style="color:#94a3b8">${t(lang,'gross_income')}</span>
-      <span style="color:#94a3b8">−</span>
-      <span style="color:#fbbf24">${formatMoney(totalComm)}</span>
-      <span style="color:#94a3b8">${t(lang,'commission_amount')}</span>
-      <span style="color:#94a3b8">−</span>
-      <span style="color:#f87171">${formatMoney(soldPurchaseCost)}</span>
-      <span style="color:#94a3b8">${t(lang,'purchase_cost')}</span>
-      <span style="color:#94a3b8">=</span>
-      <span style="color:#4ade80;font-weight:700;font-size:1rem">${formatMoney(netProfit)}</span>
-      <span style="color:#4ade80">${t(lang,'net_profit_formula')}</span>
-      <span style="color:#94a3b8">−</span>
-      <span style="color:#fb923c">${formatMoney(totalExpenses)}</span>
-      <span style="color:#94a3b8">${t(lang,'expenses')}</span>
-      <span style="color:#94a3b8">=</span>
-      <span style="color:${availableCapital>=0?'#34d399':'#f87171'};font-weight:700;font-size:1rem">${formatMoney(availableCapital)}</span>
-      <span style="color:${availableCapital>=0?'#34d399':'#f87171'}">${t(lang,'available_capital')}</span>
-    </div>
-  </div>
-
-  <!-- PRIMARY KPIs -->
+  <!-- PRIMARY KPIs — 6 cards -->
   <div class="stats-grid" style="margin-bottom:1.25rem">
+    <!-- موجودی انبار -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--primary)"></div>
       <div class="stat-label">${t(lang,'total_inventory_gb')}</div>
       <div class="stat-value primary">${formatGB(invBatch?.gb ?? 0)}</div>
       <div class="stat-sub">${formatGB(stockGb)} ${t(lang,'remaining')}</div>
     </div>
+    <!-- تخصیص شده -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#7c3aed"></div>
       <div class="stat-label">${t(lang,'allocated_gb')}</div>
       <div class="stat-value" style="color:#7c3aed">${formatGB(alloc?.gb ?? 0)}</div>
-      <div class="stat-sub">${t(lang,'sellers')}</div>
+      <div class="stat-sub">${formatMoney(alloc?.gross ?? 0)} ${t(lang,'gross')}</div>
     </div>
+    <!-- فروش شده -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--success)"></div>
       <div class="stat-label">${t(lang,'sold_gb')}</div>
       <div class="stat-value success">${formatGB(soldGb)}</div>
       <div class="stat-sub">${sls?.cnt ?? 0} ${t(lang,'transactions')}</div>
     </div>
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:#0891b2"></div>
-      <div class="stat-label">${t(lang,'gross_income')}</div>
-      <div class="stat-value" style="color:#0891b2">${formatMoney(grossRevenue)}</div>
-      <div class="stat-sub">${t(lang,'after_comm_purchase')}</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:var(--warning)"></div>
-      <div class="stat-label">${t(lang,'commissions')}</div>
-      <div class="stat-value warning">${formatMoney(totalComm)}</div>
-      <div class="stat-sub">${t(lang,'deducted_from_profit')}</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:var(--danger)"></div>
-      <div class="stat-label">${t(lang,'purchase_cost')}</div>
-      <div class="stat-value" style="color:var(--danger)">${formatMoney(soldPurchaseCost)}</div>
-      ${purchasePriceNote}
-    </div>
-    <!-- Total Received FROM Sellers -->
+    <!-- دریافتی از فروشندگان -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#0891b2"></div>
       <div class="stat-label">💰 ${t(lang,'total_received')}</div>
-      <div class="stat-value" style="color:#0891b2">${formatMoney(payTotal?.total ?? 0)}</div>
+      <div class="stat-value" style="color:#0891b2">${formatMoney(totalPaidBySellers)}</div>
       <div class="stat-sub">${t(lang,'received_from_sellers')}</div>
     </div>
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:var(--success)"></div>
-      <div class="stat-label">${t(lang,'net_profit_card')}</div>
-      <div class="stat-value success large">${formatMoney(netProfit)}</div>
-      <div class="stat-sub">${t(lang,'after_comm_purchase')}</div>
-    </div>
+    <!-- مصارف -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#f97316"></div>
       <div class="stat-label">${t(lang,'total_expenses')}</div>
       <div class="stat-value" style="color:#f97316">${formatMoney(totalExpenses)}</div>
       <div class="stat-sub"><a href="/expenses" style="color:var(--primary);font-size:.75rem">${t(lang,'manage')}</a></div>
     </div>
+    <!-- سرمایه موجود -->
     <div class="stat-card" style="background:${availableCapital>=0?'linear-gradient(135deg,var(--success-light,#dcfce7),var(--bg-secondary))':'linear-gradient(135deg,#fee2e2,var(--bg-secondary))'}">
       <div class="stat-card-accent" style="background:${availableCapital>=0?'var(--success)':'var(--danger)'}"></div>
       <div class="stat-label">${t(lang,'available_capital_card')}</div>
       <div class="stat-value" style="color:${availableCapital>=0?'var(--success)':'var(--danger)'};font-size:1.35rem">${formatMoney(availableCapital)}</div>
-      <div class="stat-sub">${t(lang,'net_profit_minus_expenses')}</div>
-    </div>
-  </div>
-
-  <!-- Charts + Activity -->
-  <div class="dash-chart-row">
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">📈 ${t(lang,'gross_income')} — ${t(lang,'days_7')}</div>
-        <div style="display:flex;gap:.75rem;font-size:.72rem;color:var(--text-muted)">
-          <span style="color:var(--primary)">● ${t(lang,'gross')}</span>
-          <span style="color:var(--success)">● ${t(lang,'net')}</span>
-        </div>
-      </div>
-      <canvas id="revChart" height="120"></canvas>
-    </div>
-    <div class="card" style="overflow:hidden">
-      <div class="card-header">
-        <div class="card-title">${t(lang,'recent_expenses')}</div>
-        <a href="/expenses" class="btn btn-outline btn-sm">${t(lang,'view_all')}</a>
-      </div>
-      ${expRows || `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">💸</div><h3>${t(lang,'no_expenses_yet')}</h3></div>`}
-      ${totalExpenses>0?`<div style="padding:.75rem 1rem;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-weight:600">
-        <span>${t(lang,'total')}</span><span style="color:var(--danger)">${formatMoney(totalExpenses)}</span>
-      </div>`:''}
+      <div class="stat-sub">دریافتی − خرید − مصارف</div>
     </div>
   </div>
 
@@ -378,41 +253,7 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
       </table>
     </div>` : `<div class="empty-state"><div class="empty-state-icon">👥</div><h3>${t(lang,'no_data')}</h3></div>`}
   </div>
-
-  <!-- Monthly Trend -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title">${t(lang,'monthly_trend')} (${t(lang,'months_6')})</div>
-    </div>
-    <div style="padding:.875rem">
-      ${monthlyRows || `<div class="empty-state"><div class="empty-state-icon">📅</div><h3>${t(lang,'no_data')}</h3></div>`}
-    </div>
-  </div>
-
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script>
-  const ctx7 = document.getElementById('revChart');
-  if(ctx7) {
-    new Chart(ctx7, {
-      type:'bar',
-      data:{
-        labels:${chartLabels},
-        datasets:[
-          {label:'${t(lang,'gross')}',data:${chartGross},backgroundColor:'rgba(99,102,241,.55)',borderColor:'var(--primary)',borderWidth:1.5,borderRadius:4},
-          {label:'${t(lang,'net')}',data:${chartNet},backgroundColor:'rgba(34,197,94,.45)',borderColor:'var(--success)',borderWidth:1.5,borderRadius:4}
-        ]
-      },
-      options:{
-        responsive:true,interaction:{mode:'index',intersect:false},
-        plugins:{legend:{display:false}},
-        scales:{
-          x:{grid:{color:'var(--border)'},ticks:{color:'var(--text-muted)',font:{size:10}}},
-          y:{grid:{color:'var(--border)'},ticks:{color:'var(--text-muted)',font:{size:10},callback:v=>'؋'+Math.round(v).toLocaleString()}}
-        }
-      }
-    });
-  }
-  </script>`;
+  `;
 }
 
 // ============================================================
@@ -817,19 +658,19 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
     <!-- Monthly Trend -->
     <div class="card">
       <div class="card-header">
-        <div class="card-title">📅 Monthly Trend</div>
-        <span style="font-size:.72rem;color:var(--text-muted)">Last 6 months</span>
+        <div class="card-title">📅 روند ماهانه</div>
+        <span style="font-size:.72rem;color:var(--text-muted)">۶ ماه اخیر</span>
       </div>
       ${(monthlySales.results || []).length ? `
       <div class="table-wrapper">
         <table>
           <thead>
             <tr>
-              <th>Month</th>
+              <th>ماه</th>
               <th>GB</th>
-              <th>Gross</th>
-              <th>Comm.</th>
-              <th style="text-align:center">Txns</th>
+              <th>ناخالص</th>
+              <th>کمیسیون</th>
+              <th style="text-align:center">معاملات</th>
             </tr>
           </thead>
           <tbody>${monthlyRows}</tbody>
@@ -837,14 +678,12 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       </div>` : `
       <div class="empty-state" style="padding:2rem">
         <div class="empty-state-icon">📅</div>
-        <h3>No monthly data yet</h3>
+        <h3>هنوز داده‌ای نیست</h3>
       </div>`}
     </div>
   </div>
 
-  <!-- ══════════════════════════════════════════
-       ROW 3 – RECENT SALES TABLE (full width)
-  ══════════════════════════════════════════ -->
+  <!-- ROW 3 – RECENT SALES TABLE (full width) -->
   <div class="card" style="margin-bottom:1rem">
     <div class="card-header">
       <div class="card-title">💰 فروش‌های اخیر
@@ -892,14 +731,14 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
     <!-- Allocations -->
     <div class="card">
       <div class="card-header">
-        <div class="card-title">🔀 Stock Allocations
+        <div class="card-title">🔀 تخصیص‌های من
           <span class="badge badge-info" style="margin-left:.5rem;font-size:.72rem">${allocTotals?.batches ?? 0}</span>
         </div>
-        <a href="/allocations" class="btn btn-outline btn-sm">View All →</a>
+        <a href="/allocations" class="btn btn-outline btn-sm">همه →</a>
       </div>
       <div style="padding:.5rem 1rem;background:var(--bg-tertiary,var(--bg-secondary));display:flex;gap:2rem;font-size:.82rem;border-bottom:1px solid var(--border)">
-        <span>Total Allocated: <strong class="text-primary">${formatGB(allocTotals?.gb ?? 0)}</strong></span>
-        <span>Remaining: <strong style="color:#7c3aed">${formatGB(remainingGb)}</strong></span>
+        <span>کل تخصیص: <strong class="text-primary">${formatGB(allocTotals?.gb ?? 0)}</strong></span>
+        <span>باقی‌مانده: <strong style="color:#7c3aed">${formatGB(remainingGb)}</strong></span>
       </div>
       ${(recentAllocs.results || []).length ? `
       <div class="table-wrapper">
@@ -926,10 +765,10 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
     <!-- Payments -->
     <div class="card">
       <div class="card-header">
-        <div class="card-title">💳 پرداخت‌های فروشنده به سیستم
+        <div class="card-title">💳 پرداختی‌های من به مالک
           <span class="badge badge-success" style="margin-left:.5rem;font-size:.72rem">${paidRow?.cnt ?? 0}</span>
         </div>
-        <a href="/payments" class="btn btn-outline btn-sm">همه پرداخت‌ها →</a>
+        <a href="/payments" class="btn btn-outline btn-sm">همه →</a>
       </div>
       <div style="padding:.5rem 1rem;background:var(--bg-tertiary,var(--bg-secondary));display:flex;gap:2rem;font-size:.82rem;border-bottom:1px solid var(--border)">
         <span>ارزش تخصیص: <strong style="color:#0891b2">${formatMoney(allocValue)}</strong></span>
@@ -955,7 +794,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       <div class="empty-state" style="padding:1.5rem">
         <div class="empty-state-icon">💳</div>
         <h3>هنوز پرداختی ثبت نشده</h3>
-        <p style="font-size:.82rem;color:var(--text-muted)">پرداخت‌های شما به مالک اینجا نمایش داده می‌شود</p>
+        <p style="font-size:.82rem;color:var(--text-muted)">پرداختی‌های شما به مالک اینجا نمایش داده می‌شود</p>
       </div>`}
     </div>
   </div>
@@ -968,10 +807,10 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       <div class="card-title">💸 مصارف شخصی
         <span class="badge" style="background:#f43f5e22;color:#f43f5e;border:1px solid #f43f5e44;margin-right:.4rem;font-size:.72rem">${personalExpCnt}</span>
       </div>
-      <a href="/expenses" class="btn btn-outline btn-sm">همه مصارف →</a>
+      <a href="/expenses" class="btn btn-outline btn-sm">همه →</a>
     </div>
     <div style="padding:.5rem 1rem;background:linear-gradient(135deg,#fff1f2,var(--bg-secondary));border-bottom:1px solid var(--border);font-size:.78rem;color:#9f1239">
-      ℹ️ این مصارف <strong>صرفاً برای کنترل شخصی</strong> شما ثبت شده و در محاسبه بدهی یا حساب سیستم تأثیر ندارد.
+      ℹ️ این مصارف <strong>صرفاً برای کنترل شخصی</strong> شما ثبت شده و در محاسبه بدهی یا پرداختی به مالک تأثیر ندارد.
       مجموع: <strong style="color:#f43f5e">${formatMoney(personalExpTotal)}</strong>
     </div>
     ${(recentPersonalExp.results || []).length ? `
@@ -1038,9 +877,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
     </div>
   </div>
 
-  <!-- ══════════════════════════════════════════
-       ROW 6 – FINANCIAL SUMMARY (مصارف / مالی خلاصه)
-  ══════════════════════════════════════════ -->
+  <!-- ROW 6 – FINANCIAL SUMMARY -->
   <div class="card" style="margin-bottom:1rem">
     <div class="card-header">
       <div class="card-title">💸 ${t(lang,'financial_summary')}</div>
@@ -1057,7 +894,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
 
       <!-- Total Paid by Seller -->
       <div style="background:linear-gradient(135deg,#dcfce7,var(--bg-secondary));border-radius:10px;padding:1rem;border:1px solid #86efac">
-        <div style="font-size:.72rem;color:#14532d;font-weight:600;margin-bottom:.4rem">💸 ${t(lang,'seller_paid_to_owner')}</div>
+        <div style="font-size:.72rem;color:#14532d;font-weight:600;margin-bottom:.4rem">💳 ${t(lang,'seller_paid_to_owner')}</div>
         <div style="font-size:1.4rem;font-weight:700;color:#15803d">${formatMoney(totalPaid)}</div>
         <div style="font-size:.72rem;color:#14532d;margin-top:.25rem">${paidRow?.cnt ?? 0} ${t(lang,'payments_count')}</div>
       </div>
@@ -1182,21 +1019,100 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
 
 // ============================================================
 // FINANCIAL INVESTOR DASHBOARD
-// Mode: financial — shows allocations, payments, balances
-// Focus: GB allocated, price, paid, remain
-// No sales data in this mode
+// Mode: financial — shows allocations, payments, balances + commission + purchase cost
+// This mode is for owners who do NOT sell themselves; sellers do all selling.
+// Formula:
+//   ناخالص (Gross)        = total_gross from allocation_batches
+//   کمیسیون (Commission)  = total_commission (auto-deducted for sellers)
+//   پول خرید (Purchase)   = total_gb × purchase_price_per_gb (from company settings)
+//   سود خالص مالک         = Gross − Commission − Purchase Cost
+//   دریافتی (Paid)        = payments received from sellers
+//   باقی‌مانده            = Net (seller owes) − Paid
+//   سرمایه موجود         = Paid − مصارف شرکت
 // ============================================================
 async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang): Promise<string> {
 
-  // ── Company-level ledger summary ───────────────────────────
-  const summary = await getCompanyLedgerSummary(db, user.company_id);
+  // ── Company settings (purchase price per GB) ─────────────
+  const company = await db.prepare('SELECT name, settings FROM companies WHERE id=?')
+    .bind(user.company_id).first<any>();
+  const settings = JSON.parse(company?.settings || '{}');
+  const purchasePricePerGb: number = settings.purchase_price_per_gb ?? 0;
 
-  // ── Per-seller balances from ledger ───────────────────────
-  const sellerBalances = await getAllSellerBalances(db, user.company_id);
+  // ── Company-wide totals from allocation_batches (source of truth) ─────
+  const allocTotals = await db.prepare(`
+    SELECT
+      COALESCE(SUM(total_gb),0)         as total_gb,
+      COALESCE(SUM(total_gross),0)      as total_gross,
+      COALESCE(SUM(total_commission),0) as total_commission,
+      COALESCE(SUM(total_net),0)        as total_net
+    FROM allocation_batches WHERE company_id=?
+  `).bind(user.company_id).first<any>();
+
+  const totalGb         = allocTotals?.total_gb         ?? 0;
+  const totalGross      = allocTotals?.total_gross       ?? 0;
+  const totalCommission = allocTotals?.total_commission  ?? 0;
+  const totalNet        = allocTotals?.total_net         ?? 0;   // what sellers owe owner
+
+  // ── Purchase cost (auto-calculated: GB × price from settings) ─────────
+  const totalPurchaseCost = Math.round(totalGb * purchasePricePerGb * 100) / 100;
+
+  // ── Owner's net profit = Gross − Commission − Purchase Cost ──────────
+  const ownerNetProfit = totalGross - totalCommission - totalPurchaseCost;
+
+  // ── Total payments received from sellers ─────────────────
+  const payRow = await db.prepare(`
+    SELECT COALESCE(SUM(amount),0) as total_paid
+    FROM payments WHERE company_id=?
+  `).bind(user.company_id).first<{total_paid:number}>();
+  const totalPaid = payRow?.total_paid ?? 0;
+
+  // ── Remaining balance sellers still owe ──────────────────
+  const totalRemaining = totalNet - totalPaid;
+
+  // ── Company expenses ─────────────────────────────────────
+  const expRow = await db.prepare(`
+    SELECT COALESCE(SUM(amount),0) as total FROM expenses
+    WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0)
+  `).bind(user.company_id).first<{total:number}>();
+  const totalExpenses = expRow?.total ?? 0;
+
+  // ── Available capital = paid − purchase_cost − expenses ──
+  const availableCapital = totalPaid - totalPurchaseCost - totalExpenses;
+
+  // ── Per-seller breakdown (joined from allocation_batches + payments) ──
+  const sellerStats = await db.prepare(`
+    SELECT
+      u.id as seller_id,
+      u.full_name as seller_name,
+      u.commission_rate,
+      COALESCE(ab.total_gb,0)         as total_gb,
+      COALESCE(ab.total_gross,0)      as total_gross,
+      COALESCE(ab.total_commission,0) as total_commission,
+      COALESCE(ab.total_net,0)        as total_net,
+      COALESCE(p.total_paid,0)        as total_paid
+    FROM users u
+    LEFT JOIN (
+      SELECT seller_id,
+        SUM(total_gb)         as total_gb,
+        SUM(total_gross)      as total_gross,
+        SUM(total_commission) as total_commission,
+        SUM(total_net)        as total_net
+      FROM allocation_batches WHERE company_id=?
+      GROUP BY seller_id
+    ) ab ON ab.seller_id = u.id
+    LEFT JOIN (
+      SELECT seller_id, SUM(amount) as total_paid
+      FROM payments WHERE company_id=?
+      GROUP BY seller_id
+    ) p ON p.seller_id = u.id
+    WHERE u.company_id=? AND u.role='seller' AND u.active=1
+      AND (ab.total_gb IS NOT NULL OR p.total_paid IS NOT NULL)
+    ORDER BY ab.total_gb DESC
+  `).bind(user.company_id, user.company_id, user.company_id).all<any>();
 
   // ── Recent allocations (last 10) ──────────────────────────
   const recentAllocs = await db.prepare(`
-    SELECT ab.id, ab.created_at, ab.total_gb, ab.total_net,
+    SELECT ab.id, ab.created_at, ab.total_gb, ab.total_gross, ab.total_commission, ab.total_net,
            u.full_name as seller_name, br.name as branch_name
     FROM allocation_batches ab
     JOIN users u ON u.id = ab.seller_id
@@ -1215,58 +1131,88 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
     ORDER BY p.payment_date DESC, p.created_at DESC LIMIT 10
   `).bind(user.company_id).all<any>();
 
-  // ── Company expenses (capital expenditure) ────────────────
-  const expTotalInv = await db.prepare(`
-    SELECT COALESCE(SUM(amount),0) as total FROM expenses
-    WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0)
-  `).bind(user.company_id).first<{total:number}>();
-  const totalExpensesInv = expTotalInv?.total ?? 0;
+  // ── 7-day daily payments chart ────────────────────────────
+  const chart7Pay = await db.prepare(`
+    SELECT date(payment_date) as day,
+           COALESCE(SUM(amount),0) as total,
+           COUNT(*) as cnt
+    FROM payments WHERE company_id=?
+      AND payment_date >= date('now','-6 days')
+    GROUP BY day ORDER BY day ASC
+  `).bind(user.company_id).all<any>();
 
-  // ── Purchase cost (capital invested) ─────────────────────
-  const invCapital = await db.prepare(`
-    SELECT COALESCE(SUM(purchase_cost),0) as total FROM inventory_batches
-    WHERE company_id=?
-  `).bind(user.company_id).first<{total:number}>();
-  const capitalInvested = invCapital?.total ?? 0;
+  // ── 6-month monthly trend (allocations + payments) ────────
+  const monthly6 = await db.prepare(`
+    SELECT
+      strftime('%Y-%m', ab.created_at) as month,
+      COALESCE(SUM(ab.total_gb),0)         as alloc_gb,
+      COALESCE(SUM(ab.total_gross),0)      as alloc_gross,
+      COALESCE(SUM(ab.total_commission),0) as alloc_comm,
+      COALESCE(SUM(ab.total_net),0)        as alloc_net
+    FROM allocation_batches ab
+    WHERE ab.company_id=?
+    GROUP BY month ORDER BY month DESC LIMIT 6
+  `).bind(user.company_id).all<any>();
 
-  // ── remain = total_price - total_paid ────────────────────
-  const remain = summary.total_price - summary.total_paid;
-  // ── Net Capital = total_paid - expenses ──────────────────
-  const netCapital = summary.total_paid - totalExpensesInv;
+  const monthly6Pay = await db.prepare(`
+    SELECT strftime('%Y-%m', payment_date) as month,
+           COALESCE(SUM(amount),0) as paid
+    FROM payments WHERE company_id=?
+    GROUP BY month ORDER BY month DESC LIMIT 6
+  `).bind(user.company_id).all<any>();
 
-  // ── Seller rows ───────────────────────────────────────────
-  const sellerRows = sellerBalances.map((s: any) => {
-    const pct = s.total_allocated > 0
-      ? Math.min(100, Math.round((s.total_paid / s.total_allocated) * 100))
+  // merge payment totals into monthly6 by month key
+  const payByMonth: Record<string,number> = Object.fromEntries(
+    (monthly6Pay.results||[]).map((r:any) => [r.month, r.paid])
+  );
+
+  // ── Build chart data (last 7 days) ────────────────────────
+  const days7: string[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    days7.push(d.toISOString().split('T')[0]);
+  }
+  const payChartMap = Object.fromEntries((chart7Pay.results||[]).map((r:any)=>[r.day,r]));
+  const chartLabels7 = JSON.stringify(days7.map(d=>new Date(d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric'})));
+  const chartPayData = JSON.stringify(days7.map(d=>Math.round(payChartMap[d]?.total??0)));
+  const chartPayCnt  = JSON.stringify(days7.map(d=>payChartMap[d]?.cnt??0));
+
+  // ── Per-seller table rows ─────────────────────────────────
+  const sellerRows = (sellerStats.results || []).map((s: any) => {
+    const remaining = (s.total_net ?? 0) - (s.total_paid ?? 0);
+    const pct = s.total_net > 0
+      ? Math.min(100, Math.round((s.total_paid / s.total_net) * 100))
       : 0;
-    const balanceColor = s.balance > 0 ? 'var(--danger)' : s.balance < 0 ? 'var(--success)' : 'var(--text-muted)';
+    const commPct = Math.round((s.commission_rate ?? 0) * 100);
+    const remColor = remaining > 0 ? 'var(--danger)' : remaining < 0 ? 'var(--success)' : 'var(--text-muted)';
     return `
     <tr>
-      <td><strong>${s.seller_name}</strong></td>
+      <td><strong>${s.seller_name}</strong><div style="font-size:.7rem;color:var(--text-muted)">کمیسیون: ${commPct}%</div></td>
       <td class="text-primary font-bold">${formatGB(s.total_gb)}</td>
-      <td>${formatMoney(s.total_allocated)}</td>
+      <td style="color:var(--text-secondary)">${formatMoney(s.total_gross)}</td>
+      <td class="text-warning font-bold">−${formatMoney(s.total_commission)}<div style="font-size:.7rem">${commPct}%</div></td>
+      <td class="font-bold" style="color:#0891b2">${formatMoney(s.total_net)}</td>
       <td class="text-success font-bold">${formatMoney(s.total_paid)}</td>
-      <td style="color:${balanceColor};font-weight:600">${formatMoney(Math.abs(s.balance))}
-        <span style="font-size:.7rem;color:var(--text-muted)">${s.balance > 0 ? '(بدهی)' : s.balance < 0 ? '(اضافه)' : '(تسویه)'}</span>
+      <td style="color:${remColor};font-weight:600">${formatMoney(Math.abs(remaining))}
+        <div style="font-size:.7rem;color:var(--text-muted)">${remaining > 0 ? '(بدهی)' : remaining < 0 ? '(اضافه)' : '(تسویه)'}</div>
       </td>
       <td>
-        <div style="background:var(--bg-secondary);border-radius:99px;height:8px;width:80px;overflow:hidden">
+        <div style="background:var(--bg-secondary);border-radius:99px;height:8px;width:70px;overflow:hidden">
           <div style="background:${pct>=100?'var(--success)':'var(--primary)'};height:100%;width:${pct}%;border-radius:99px"></div>
         </div>
         <div style="font-size:.7rem;color:var(--text-muted);margin-top:.2rem">${pct}%</div>
       </td>
-      <td>
-        <a href="/ledger/seller/${s.seller_id}" class="btn btn-outline btn-sm">📒 دفتر</a>
-      </td>
+      <td><a href="/ledger/seller/${s.seller_id}" class="btn btn-outline btn-sm">📒 دفتر</a></td>
     </tr>`;
   }).join('');
 
   const recentAllocRows = (recentAllocs.results || []).map((a: any) => `
     <tr>
       <td style="font-size:.8rem">${new Date(a.created_at).toLocaleDateString('en-GB')}</td>
-      <td><strong>${a.seller_name}</strong></td>
-      <td>${a.branch_name}</td>
+      <td><strong>${a.seller_name}</strong><div style="font-size:.72rem;color:var(--text-muted)">${a.branch_name}</div></td>
       <td class="text-primary font-bold">${formatGB(a.total_gb)}</td>
+      <td style="color:var(--text-secondary)">${formatMoney(a.total_gross)}</td>
+      <td class="text-warning">−${formatMoney(a.total_commission)}</td>
       <td class="text-success font-bold">${formatMoney(a.total_net)}</td>
     </tr>`).join('');
 
@@ -1275,15 +1221,16 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
       <td style="font-size:.8rem">${p.payment_date}</td>
       <td><strong>${p.seller_name}</strong></td>
       <td><span class="badge badge-${p.type==='settlement'?'success':p.type==='commission'?'warning':'info'}">${p.type}</span></td>
-      <td class="text-success font-bold">${formatMoney(p.amount)}</td>
+      <td class="text-success font-bold">+${formatMoney(p.amount)}</td>
       <td style="font-size:.78rem;color:var(--text-muted)">${p.notes||'—'}</td>
     </tr>`).join('');
 
   return `
+  <!-- Page Header -->
   <div class="page-header">
     <div>
-      <div class="page-title">💼 داشبورد مالی سرمایه‌گذار</div>
-      <div class="page-subtitle">Financial Investor Mode · All-time summary</div>
+      <div class="page-title">💼 داشبورد مالی</div>
+      <div class="page-subtitle">${company?.name ?? ''} · خلاصه کلی</div>
     </div>
     <div class="btn-group">
       <a href="/dashboard?mode=owner" class="btn btn-outline btn-sm">📊 حالت مالک</a>
@@ -1292,99 +1239,146 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
     </div>
   </div>
 
-  <!-- INVESTOR FORMULA BANNER -->
-  <div style="background:linear-gradient(135deg,#0f172a,#1e293b);border-radius:12px;padding:1rem 1.5rem;margin-bottom:1.25rem;border:1px solid #334155">
-    <div style="color:#94a3b8;font-size:.75rem;font-weight:600;margin-bottom:.75rem;letter-spacing:.05em">📐 فرمول مالی: قیمت کل − دریافتی = باقی‌مانده &nbsp;|&nbsp; دریافتی − مصارف = سرمایه موجود</div>
-    <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;font-size:.95rem">
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.7rem">قیمت کل تخصیص</div>
-        <div style="color:#e2e8f0;font-weight:700;font-size:1.2rem">${formatMoney(summary.total_price)}</div>
-      </div>
-      <div style="color:#475569;font-size:1.5rem">−</div>
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.7rem">دریافتی</div>
-        <div style="color:#34d399;font-weight:700;font-size:1.2rem">${formatMoney(summary.total_paid)}</div>
-      </div>
-      <div style="color:#475569;font-size:1.5rem">=</div>
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.7rem">باقی‌مانده (بدهی)</div>
-        <div style="color:${remain>0?'#f87171':'#34d399'};font-weight:700;font-size:1.4rem">${formatMoney(Math.abs(remain))}</div>
-      </div>
-      <div style="color:#334155;font-size:1.5rem;margin:0 .5rem">|</div>
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.7rem">دریافتی</div>
-        <div style="color:#34d399;font-weight:700;font-size:1.2rem">${formatMoney(summary.total_paid)}</div>
-      </div>
-      <div style="color:#475569;font-size:1.5rem">−</div>
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.7rem">مصارف</div>
-        <div style="color:#fb923c;font-weight:700;font-size:1.2rem">${formatMoney(totalExpensesInv)}</div>
-      </div>
-      <div style="color:#475569;font-size:1.5rem">=</div>
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.7rem">سرمایه موجود</div>
-        <div style="color:${netCapital>=0?'#34d399':'#f87171'};font-weight:700;font-size:1.4rem">${formatMoney(Math.abs(netCapital))}</div>
-      </div>
+  <!-- COMPACT FORMULA STRIP -->
+  <div style="background:linear-gradient(135deg,#0f172a,#1e293b);border-radius:12px;padding:.875rem 1.25rem;margin-bottom:1.25rem;border:1px solid #334155;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:.82rem">
+    <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+      <span style="color:#94a3b8;font-size:.7rem">ناخالص</span>
+      <span style="color:#e2e8f0;font-weight:700">${formatMoney(totalGross)}</span>
+      <span style="color:#475569">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">کمیسیون</span>
+      <span style="color:#fbbf24;font-weight:700">${formatMoney(totalCommission)}</span>
+      <span style="color:#475569">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">خرید</span>
+      <span style="color:#f97316;font-weight:700">${formatMoney(totalPurchaseCost)}</span>
+      <span style="color:#475569">=</span>
+      <span style="color:#94a3b8;font-size:.7rem">سود خالص</span>
+      <span style="color:${ownerNetProfit>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney(ownerNetProfit)}</span>
+    </div>
+    <div style="width:1px;height:28px;background:#334155;margin:0 .5rem"></div>
+    <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+      <span style="color:#94a3b8;font-size:.7rem">دریافتی</span>
+      <span style="color:#34d399;font-weight:700">${formatMoney(totalPaid)}</span>
+      <span style="color:#475569">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">خرید</span>
+      <span style="color:#f97316;font-weight:700">${formatMoney(totalPurchaseCost)}</span>
+      <span style="color:#475569">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">مصارف</span>
+      <span style="color:#fb923c;font-weight:700">${formatMoney(totalExpenses)}</span>
+      <span style="color:#475569">=</span>
+      <span style="color:#94a3b8;font-size:.7rem">سرمایه موجود</span>
+      <span style="color:${availableCapital>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney(availableCapital)}</span>
     </div>
   </div>
 
   <!-- 6 KPI CARDS -->
-  <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:1.25rem">
+  <div class="stats-grid" style="margin-bottom:1.25rem">
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#7c3aed"></div>
-      <div class="stat-label">📦 کل GB تخصیص</div>
-      <div class="stat-value" style="color:#7c3aed">${formatGB(summary.total_gb_allocated)}</div>
-      <div class="stat-sub">total allocated</div>
+      <div class="stat-label">📦 کل تخصیص</div>
+      <div class="stat-value" style="color:#7c3aed">${formatGB(totalGb)}</div>
+      <div class="stat-sub">${formatMoney(totalGross)} ناخالص</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-accent" style="background:#0891b2"></div>
-      <div class="stat-label">💰 قیمت کل</div>
-      <div class="stat-value" style="color:#0891b2">${formatMoney(summary.total_price)}</div>
-      <div class="stat-sub">total price</div>
+      <div class="stat-card-accent" style="background:#d97706"></div>
+      <div class="stat-label">🏷️ خالص بدهی فروشندگان</div>
+      <div class="stat-value warning">${formatMoney(totalNet)}</div>
+      <div class="stat-sub">کمیسیون ${formatMoney(totalCommission)} کسر شد</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--success)"></div>
-      <div class="stat-label">✅ دریافتی</div>
-      <div class="stat-value success">${formatMoney(summary.total_paid)}</div>
+      <div class="stat-label">✅ دریافتی از فروشندگان</div>
+      <div class="stat-value success">${formatMoney(totalPaid)}</div>
       <div class="stat-sub">total received</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-accent" style="background:${remain>0?'var(--danger)':'var(--success)'}"></div>
-      <div class="stat-label">⏳ باقی‌مانده</div>
-      <div class="stat-value" style="color:${remain>0?'var(--danger)':'var(--success)'}">${formatMoney(Math.abs(remain))}</div>
-      <div class="stat-sub">${remain>0?'بدهی کل':'اضافه دریافت'}</div>
+      <div class="stat-card-accent" style="background:${totalRemaining>0?'var(--danger)':'var(--success)'}"></div>
+      <div class="stat-label">⏳ باقی‌مانده بدهی</div>
+      <div class="stat-value" style="color:${totalRemaining>0?'var(--danger)':'var(--success)'}">${formatMoney(Math.abs(totalRemaining))}</div>
+      <div class="stat-sub">${totalRemaining>0?'هنوز نپرداخته':'اضافه پرداخت'}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#f97316"></div>
-      <div class="stat-label">💸 مصارف</div>
-      <div class="stat-value" style="color:#f97316">${formatMoney(totalExpensesInv)}</div>
+      <div class="stat-label">💸 مصارف شرکت</div>
+      <div class="stat-value" style="color:#f97316">${formatMoney(totalExpenses)}</div>
       <div class="stat-sub"><a href="/expenses" style="color:var(--primary);font-size:.75rem">مدیریت →</a></div>
     </div>
-    <div class="stat-card" style="background:${netCapital>=0?'linear-gradient(135deg,#dcfce7,var(--bg-secondary))':'linear-gradient(135deg,#fee2e2,var(--bg-secondary))'}">
-      <div class="stat-card-accent" style="background:${netCapital>=0?'var(--success)':'var(--danger)'}"></div>
+    <div class="stat-card" style="background:${availableCapital>=0?'linear-gradient(135deg,#dcfce7,var(--bg-secondary))':'linear-gradient(135deg,#fee2e2,var(--bg-secondary))'}">
+      <div class="stat-card-accent" style="background:${availableCapital>=0?'var(--success)':'var(--danger)'}"></div>
       <div class="stat-label">💎 سرمایه موجود</div>
-      <div class="stat-value" style="color:${netCapital>=0?'var(--success)':'var(--danger)'};font-size:1.2rem">${formatMoney(Math.abs(netCapital))}</div>
-      <div class="stat-sub">دریافتی − مصارف</div>
+      <div class="stat-value" style="color:${availableCapital>=0?'var(--success)':'var(--danger)'};font-size:1.35rem">${formatMoney(availableCapital)}</div>
+      <div class="stat-sub">دریافتی − خرید − مصارف</div>
     </div>
   </div>
 
-  <!-- PER-SELLER BALANCES TABLE -->
+  <!-- CHART (7-day) + MONTHLY TREND (6 months) -->
+  <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:1rem;margin-bottom:1.25rem">
+
+    <!-- 7-Day Payments Bar Chart -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">📈 دریافتی‌ها — ۷ روز اخیر</div>
+        <span style="font-size:.72rem;color:var(--text-muted)">روزانه</span>
+      </div>
+      <div style="padding:.75rem 1rem 1rem">
+        <canvas id="invChart" height="130"></canvas>
+      </div>
+    </div>
+
+    <!-- 6-Month Monthly Trend -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">📅 روند ۶ ماهه</div>
+        <span style="font-size:.72rem;color:var(--text-muted)">تخصیص / دریافتی</span>
+      </div>
+      ${(monthly6.results||[]).length ? `
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>ماه</th>
+            <th>GB</th>
+            <th>خالص بدهی</th>
+            <th>دریافتی</th>
+          </tr></thead>
+          <tbody>
+            ${(monthly6.results||[]).map((m:any) => {
+              const paid = payByMonth[m.month] ?? 0;
+              const rem  = m.alloc_net - paid;
+              return `<tr>
+                <td class="font-bold" style="font-size:.8rem">${m.month}</td>
+                <td class="text-primary">${formatGB(m.alloc_gb)}</td>
+                <td style="color:#0891b2">${formatMoney(m.alloc_net)}</td>
+                <td class="text-success">${formatMoney(paid)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>` : `
+      <div class="empty-state" style="padding:2rem">
+        <div class="empty-state-icon">📅</div>
+        <h3>هنوز داده‌ای نیست</h3>
+      </div>`}
+    </div>
+  </div>
+
+  <!-- PER-SELLER TABLE -->
   <div class="card" style="margin-bottom:1.25rem">
     <div class="card-header">
       <div class="card-title">👥 وضعیت مالی فروشندگان</div>
       <a href="/ledger" class="btn btn-outline btn-sm">📒 دفتر کل</a>
     </div>
-    ${sellerBalances.length ? `
+    ${(sellerStats.results||[]).length ? `
     <div class="table-wrapper">
       <table>
         <thead><tr>
           <th>فروشنده</th>
           <th>GB تخصیص</th>
-          <th>قیمت</th>
+          <th>ناخالص</th>
+          <th>کمیسیون</th>
+          <th>خالص بدهی</th>
           <th>دریافتی</th>
           <th>باقی‌مانده</th>
           <th>پیشرفت</th>
-          <th>عملیات</th>
+          <th></th>
         </tr></thead>
         <tbody>${sellerRows}</tbody>
       </table>
@@ -1394,8 +1388,6 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
 
   <!-- TWO-COLUMN: RECENT ALLOCATIONS + RECENT PAYMENTS -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
-
-    <!-- Recent Allocations -->
     <div class="card">
       <div class="card-header">
         <div class="card-title">🔀 آخرین تخصیص‌ها</div>
@@ -1404,13 +1396,15 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
       ${(recentAllocs.results||[]).length ? `
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>تاریخ</th><th>فروشنده</th><th>شعبه</th><th>GB</th><th>خالص</th></tr></thead>
+          <thead><tr>
+            <th>تاریخ</th><th>فروشنده</th><th>GB</th>
+            <th>ناخالص</th><th>کمیسیون</th><th>خالص</th>
+          </tr></thead>
           <tbody>${recentAllocRows}</tbody>
         </table>
       </div>` : `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">🔀</div><h3>بدون تخصیص</h3></div>`}
     </div>
 
-    <!-- Recent Payments -->
     <div class="card">
       <div class="card-header">
         <div class="card-title">💰 آخرین دریافتی‌ها</div>
@@ -1424,7 +1418,45 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
         </table>
       </div>` : `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">💰</div><h3>بدون دریافتی</h3></div>`}
     </div>
-  </div>`;
+  </div>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script>
+  (function(){
+    const ctx = document.getElementById('invChart');
+    if(!ctx) return;
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: ${chartLabels7},
+        datasets: [{
+          label: 'دریافتی',
+          data: ${chartPayData},
+          backgroundColor: 'rgba(52,211,153,.55)',
+          borderColor: '#10b981',
+          borderWidth: 1.5,
+          borderRadius: 5
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => ' ؋' + Math.round(ctx.parsed.y).toLocaleString()
+            }
+          }
+        },
+        scales: {
+          x: { grid:{color:'rgba(148,163,184,.08)'}, ticks:{color:'var(--text-muted)',font:{size:10}} },
+          y: { grid:{color:'rgba(148,163,184,.08)'}, ticks:{color:'#10b981',font:{size:10}, callback: v=>'؋'+Math.round(v).toLocaleString()} }
+        }
+      }
+    });
+  })();
+  </script>`;
 }
 
 

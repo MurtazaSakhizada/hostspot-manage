@@ -66,14 +66,14 @@
 
       <div class="splash-title">HotSpot Manager</div>
       <div class="splash-subtitle">سیستم مدیریت هات‌اسپات</div>
-    </div>
 
-    <!-- Loading bar at bottom -->
-    <div class="splash-loader-wrap">
-      <div class="splash-loader">
-        <div class="splash-loader-bar"></div>
+      <!-- Loading bar — inside content so whole block is truly centered -->
+      <div class="splash-loader-wrap">
+        <div class="splash-loader">
+          <div class="splash-loader-bar"></div>
+        </div>
+        <div class="splash-loader-text">Loading</div>
       </div>
-      <div class="splash-loader-text">Loading</div>
     </div>
   `;
 

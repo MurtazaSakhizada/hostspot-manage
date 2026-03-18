@@ -41,8 +41,9 @@ allocations.get('/', async (c) => {
            COALESCE(SUM(total_net),0) as net
     FROM allocation_batches WHERE company_id=? ${sellerFilter}`).bind(user.company_id).first<any>();
 
-  // ---- Build batch rows ----
-  const batchRows = await Promise.all((batches.results || []).map(async (b: any, i: number) => {
+  // ---- Build batch details (load lines for each batch) ----
+  const batchesWithLines: Array<{batch: any; lineRows: string}> = [];
+  for (const b of (batches.results || [])) {
     const lines = await c.env.DB.prepare(`
       SELECT l.*, p.name as pkg_name
       FROM allocation_batch_lines l
@@ -52,7 +53,7 @@ allocations.get('/', async (c) => {
     const lineRows = (lines.results || []).map((l: any) => `
       <div style="display:flex;gap:1rem;align-items:center;padding:.35rem 0;border-bottom:1px solid var(--border)">
         <span class="badge badge-primary" style="min-width:80px;text-align:center">${l.pkg_name}</span>
-        <span>${l.quantity} × ${l.size_gb}GB</span>
+        <span>${l.quantity} × ${l.size_gb} GB</span>
         <span class="text-primary font-bold">= ${formatGB(l.total_gb)}</span>
         ${user.role==='owner'?`
         <span style="color:var(--text-muted)">| ${formatMoney(l.gross_amount)}</span>
@@ -61,46 +62,118 @@ allocations.get('/', async (c) => {
         `:`<span class="text-success" style="margin-left:auto">${formatMoney(l.net_amount)}</span>`}
       </div>`).join('');
 
-    const commPct = Math.round((b.commission_rate || 0) * 100);
+    batchesWithLines.push({ batch: b, lineRows });
+  }
 
-    return `
-    <tr>
-      <td>
-        <div class="font-bold">${new Date(b.created_at).toLocaleDateString('en-GB')}</div>
-        <div style="font-size:.75rem;color:var(--text-muted)">${new Date(b.created_at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div>
-      </td>
-      <td><strong>${b.seller_name}</strong>${user.role==='owner'?`<div style="font-size:.75rem;color:var(--text-muted)">${b.branch_name}</div>`:''}</td>
-      <td><span class="badge badge-primary">${b.line_count} type${b.line_count>1?'s':''}</span></td>
-      <td class="text-primary font-bold">${formatGB(b.total_gb)}</td>
-      ${user.role==='owner'?`
-      <td>${formatMoney(b.total_gross)}</td>
-      <td class="text-warning">${formatMoney(b.total_commission)} <span class="badge badge-warning">${commPct}%</span></td>
-      <td class="text-success font-bold">${formatMoney(b.total_net)}</td>
-      `:`<td class="text-success font-bold">${formatMoney(b.total_net)}</td>`}
-      <td style="max-width:150px;color:var(--text-muted);font-size:.82rem">${b.notes||'—'}</td>
-      <td>
-        <button onclick="toggleRow('al-batch-${i}')" class="btn btn-outline btn-sm">📋 Details</button>
-        ${user.role==='owner'?`<button onclick="confirmDelete('/api/allocation-batch/${b.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>`:''}
-      </td>
-    </tr>
-    <tr id="al-batch-${i}" class="hidden">
-      <td colspan="${user.role==='owner'?9:6}" style="background:var(--gray-50);padding:.875rem 1rem">
-        <div style="font-size:.82rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">📦 Package Breakdown</div>
-        ${lineRows || '<div style="color:var(--text-muted)">No lines</div>'}
-        ${b.notes?`<div style="margin-top:.5rem;font-size:.82rem"><strong>Note:</strong> ${b.notes}</div>`:''}
-      </td>
-    </tr>`;
-  }));
+  const colCount = user.role === 'owner' ? 8 : 5;
 
-  const colCount = user.role === 'owner' ? 9 : 6;
-  const batchTableBody = batchRows.join('') || `
-    <tr><td colspan="${colCount}">
-      <div class="empty-state">
-        <div class="empty-state-icon">🔀</div>
-        <h3>${t(lang,'no_data')}</h3>
-        <p>No allocations yet. Click "+ Allocate" to begin.</p>
-      </div>
-    </td></tr>`;
+  // ---- Group by seller (owner) or flat (seller) ----
+  let batchTableBody = '';
+  if (user.role === 'owner') {
+    // Group batches by seller name
+    const grouped: Record<string, typeof batchesWithLines> = {};
+    for (const entry of batchesWithLines) {
+      const key = entry.batch.seller_name || 'نامشخص';
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(entry);
+    }
+
+    let batchIdx = 0;
+    const groupedRows = Object.entries(grouped).map(([sellerName, entries]) => {
+      const sellerGb = entries.reduce((s, e) => s + e.batch.total_gb, 0);
+      const sellerGross = entries.reduce((s, e) => s + e.batch.total_gross, 0);
+      const sellerComm = entries.reduce((s, e) => s + e.batch.total_commission, 0);
+      const sellerNet = entries.reduce((s, e) => s + e.batch.total_net, 0);
+
+      const itemRows = entries.map(({ batch: b, lineRows }) => {
+        const i = batchIdx++;
+        const commPct = Math.round((b.commission_rate || 0) * 100);
+        return `
+        <tr>
+          <td style="padding-right:1.5rem">
+            <div class="font-bold">${new Date(b.created_at).toLocaleDateString('en-GB')}</div>
+            <div style="font-size:.75rem;color:var(--text-muted)">${new Date(b.created_at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div>
+          </td>
+          <td><div style="font-size:.8rem;color:var(--text-muted)">${b.branch_name}</div></td>
+          <td><span class="badge badge-primary">${b.line_count} type${b.line_count>1?'s':''}</span></td>
+          <td class="text-primary font-bold">${formatGB(b.total_gb)}</td>
+          <td>${formatMoney(b.total_gross)}</td>
+          <td class="text-warning">${formatMoney(b.total_commission)} <span class="badge badge-warning">${commPct}%</span></td>
+          <td class="text-success font-bold">${formatMoney(b.total_net)}</td>
+          <td>
+            <button onclick="toggleRow('al-batch-${i}')" class="btn btn-outline btn-sm">📋 Details</button>
+            <button onclick="confirmDelete('/api/allocation-batch/${b.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>
+          </td>
+        </tr>
+        <tr id="al-batch-${i}" class="hidden">
+          <td colspan="${colCount}" style="background:var(--gray-50);padding:.875rem 1rem">
+            <div style="font-size:.82rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">📦 Package Breakdown</div>
+            ${lineRows || '<div style="color:var(--text-muted)">No lines</div>'}
+            ${b.notes?`<div style="margin-top:.5rem;font-size:.82rem"><strong>Note:</strong> ${b.notes}</div>`:''}
+          </td>
+        </tr>`;
+      }).join('');
+
+      return `
+      <tr style="background:var(--gray-50);border-top:2px solid var(--info,#0891b2)">
+        <td colspan="${colCount}" style="padding:.6rem 1rem">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem">
+            <div style="font-weight:700;font-size:1rem;color:var(--primary)">👤 ${sellerName}</div>
+            <div style="display:flex;gap:1rem;font-size:.82rem;flex-wrap:wrap">
+              <span>📶 <strong>${formatGB(sellerGb)}</strong></span>
+              <span>💰 <strong>${formatMoney(sellerGross)}</strong></span>
+              <span class="text-warning">کمیسیون: <strong>${formatMoney(sellerComm)}</strong></span>
+              <span class="text-success">خالص: <strong>${formatMoney(sellerNet)}</strong></span>
+              <span style="color:var(--text-muted)">${entries.length} تخصیص</span>
+            </div>
+          </div>
+        </td>
+      </tr>
+      ${itemRows}`;
+    }).join('');
+
+    batchTableBody = groupedRows || `
+      <tr><td colspan="${colCount}">
+        <div class="empty-state">
+          <div class="empty-state-icon">🔀</div>
+          <h3>${t(lang,'no_data')}</h3>
+          <p>No allocations yet. Click "+ Allocate" to begin.</p>
+        </div>
+      </td></tr>`;
+  } else {
+    // Seller view: flat list
+    let flatIdx = 0;
+    batchTableBody = batchesWithLines.map(({ batch: b, lineRows }) => {
+      const i = flatIdx++;
+      return `
+      <tr>
+        <td>
+          <div class="font-bold">${new Date(b.created_at).toLocaleDateString('en-GB')}</div>
+          <div style="font-size:.75rem;color:var(--text-muted)">${new Date(b.created_at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div>
+        </td>
+        <td style="font-size:.8rem;color:var(--text-muted)">${b.branch_name}</td>
+        <td><span class="badge badge-primary">${b.line_count} type${b.line_count>1?'s':''}</span></td>
+        <td class="text-primary font-bold">${formatGB(b.total_gb)}</td>
+        <td class="text-success font-bold">${formatMoney(b.total_net)}</td>
+        <td>
+          <button onclick="toggleRow('al-batch-${i}')" class="btn btn-outline btn-sm">📋 Details</button>
+        </td>
+      </tr>
+      <tr id="al-batch-${i}" class="hidden">
+        <td colspan="${colCount}" style="background:var(--gray-50);padding:.875rem 1rem">
+          <div style="font-size:.82rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">📦 Package Breakdown</div>
+          ${lineRows || '<div style="color:var(--text-muted)">No lines</div>'}
+          ${b.notes?`<div style="margin-top:.5rem;font-size:.82rem"><strong>Note:</strong> ${b.notes}</div>`:''}
+        </td>
+      </tr>`;
+    }).join('') || `
+      <tr><td colspan="${colCount}">
+        <div class="empty-state">
+          <div class="empty-state-icon">🔀</div>
+          <h3>${t(lang,'no_data')}</h3>
+        </div>
+      </td></tr>`;
+  }
 
   return c.html(pageShell({
     title: t(lang,'allocations'), lang, user, activePage: 'allocations',
@@ -144,11 +217,10 @@ allocations.get('/', async (c) => {
         <table>
           <thead><tr>
             <th>Date</th>
-            <th>${t(lang,'seller')}</th>
+            <th>Branch</th>
             <th>Packages</th>
             <th>Total GB</th>
             ${user.role==='owner'?`<th>Gross</th><th>Commission</th><th>Net</th>`:`<th>Net</th>`}
-            <th>Notes</th>
             <th>${t(lang,'actions')}</th>
           </tr></thead>
           <tbody>${batchTableBody}</tbody>
@@ -444,6 +516,7 @@ allocations.post('/', async (c) => {
 
 // ============================================================
 // DELETE: Remove an entire allocation batch
+// Also removes the matching financial_ledger entry so dashboard stays accurate
 // ============================================================
 allocations.delete('/api/allocation-batch/:id', async (c) => {
   const user = c.get('user');
@@ -452,6 +525,12 @@ allocations.delete('/api/allocation-batch/:id', async (c) => {
 
   const batch = await c.env.DB.prepare('SELECT * FROM allocation_batches WHERE id=? AND company_id=?').bind(id, user.company_id).first<any>();
   if (!batch) return c.json({error:'Not found'}, 404);
+
+  // Remove ledger entry that references this batch (keeps financial totals accurate)
+  await c.env.DB.prepare(`
+    DELETE FROM financial_ledger
+    WHERE company_id=? AND ref_type='allocation_batch' AND ref_id=?
+  `).bind(user.company_id, id).run();
 
   await c.env.DB.prepare('DELETE FROM allocation_batch_lines WHERE batch_id=?').bind(id).run();
   await c.env.DB.prepare('DELETE FROM allocation_batches WHERE id=? AND company_id=?').bind(id, user.company_id).run();

@@ -49,7 +49,7 @@ type TranslationKeys =
   | 'package_breakdown' | 'show_details' | 'hide_details'
   | 'transaction_history' | 'total_packages'
   // ── Entity add labels ─────────────────────────────────────
-  | 'add_inventory' | 'add_allocation' | 'add_sale' | 'add_payment'
+  | 'add_inventory' | 'add_allocation' | 'add_sale' | 'add_payment' | 'add_payment_seller'
   | 'add_branch' | 'add_package' | 'add_seller' | 'add_user'
   // ── Payment types ─────────────────────────────────────────
   | 'payment_type' | 'commission_pay' | 'advance' | 'settlement' | 'other'
@@ -115,6 +115,16 @@ type TranslationKeys =
   | 'investor_formula_label'
   // ── Seller payment label ──────────────────────────────────
   | 'seller_paid_to_owner'
+  // ── Sale edit (seller) ───────────────────────────────────
+  | 'edit_sale' | 'edit_sale_title' | 'sale_edit_note'
+  // ── Payment edit request ─────────────────────────────────
+  | 'edit_payment' | 'request_edit' | 'edit_request_sent'
+  | 'edit_requests' | 'pending_requests' | 'no_requests'
+  | 'approve' | 'reject' | 'admin_notes' | 'request_status'
+  | 'status_pending' | 'status_approved' | 'status_rejected'
+  | 'old_value' | 'new_value' | 'payment_edit_request'
+  | 'request_pending_notice' | 'edit_request_title'
+  | 'register_payment_seller'
   ;
 
 type Translations = Record<TranslationKeys, string>;
@@ -257,6 +267,7 @@ const en: Translations = {
   add_allocation: 'Add Allocation',
   add_sale: 'Add Sale',
   add_payment: 'Add Payment',
+  add_payment_seller: 'Add Payment',
   add_branch: 'Add Branch',
   add_package: 'Add Package',
   add_seller: 'Add Seller',
@@ -431,6 +442,30 @@ const en: Translations = {
   total_expenses_investor: 'Total Expenses',
   net_capital: 'Net Capital',
   investor_formula_label: '📐 Investor Formula',
+  // Sale edit
+  edit_sale: 'Edit Sale',
+  edit_sale_title: '✏️ Edit Sale',
+  sale_edit_note: 'Note: editing a sale recalculates commission automatically.',
+  // Payment edit request
+  edit_payment: 'Edit Payment',
+  request_edit: 'Request Edit',
+  edit_request_sent: '✅ Edit request submitted. Waiting for admin approval.',
+  edit_requests: '📋 Edit Requests',
+  pending_requests: 'Pending requests',
+  no_requests: 'No edit requests.',
+  approve: 'Approve',
+  reject: 'Reject',
+  admin_notes: 'Admin Notes',
+  request_status: 'Status',
+  status_pending: '🕐 Pending',
+  status_approved: '✅ Approved',
+  status_rejected: '❌ Rejected',
+  old_value: 'Previous Value',
+  new_value: 'Proposed Value',
+  payment_edit_request: 'Payment Edit Request',
+  request_pending_notice: '⏳ There is a pending edit request for this payment.',
+  edit_request_title: '📝 Request to Edit Payment',
+  register_payment_seller: '+ Register Payment',
 };
 
 // ── DARI / PERSIAN (fa) ───────────────────────────────────
@@ -531,7 +566,7 @@ const fa: Translations = {
   total_expenses: 'مجموع مصارف',
   all_expenses: 'همه مصارف',
   allocation_value: 'ارزش تخصیص',
-  paid_to_owner: 'دریافتی مالک',
+  paid_to_owner: 'پرداختی به مالک',
   debt_label: 'بدهی',
   credit_label: 'طلب',
   settled_label: 'تسویه',
@@ -571,12 +606,13 @@ const fa: Translations = {
   add_allocation: 'افزودن تخصیص',
   add_sale: 'ثبت فروش',
   add_payment: 'ثبت دریافتی',
+  add_payment_seller: 'ثبت پرداختی',
   add_branch: 'افزودن شعبه',
   add_package: 'افزودن پکیج',
   add_seller: 'افزودن فروشنده',
   add_user: 'افزودن کاربر',
 
-  payment_type: 'نوع دریافتی',
+  payment_type: 'نوع پرداختی',
   commission_pay: 'کمیسیون',
   advance: 'پیش‌پرداخت',
   settlement: 'تسویه‌حساب',
@@ -611,24 +647,24 @@ const fa: Translations = {
 
   // Seller dashboard
   financial_summary: 'خلاصه مالی',
-  payment_history: 'تاریخچه دریافتی‌ها',
+  payment_history: 'تاریخچه پرداختی‌ها',
   commission_earned_lbl: 'کمیسیون کسب‌شده',
   total_paid_to_owner: 'مجموع دریافتی از فروشندگان',
   debt_balance: 'بدهی / مانده حساب',
-  payments_by_type: 'دریافتی‌ها بر اساس نوع',
+  payments_by_type: 'پرداختی‌ها بر اساس نوع',
   debt_to_owner: '⚠️ بدهی به مالک',
   owner_owes_you: '✅ مالک بدهکار شماست',
   settled: '✓ تسویه شده',
   sales_count: 'فروش',
-  payments_count: 'دریافتی',
+  payments_count: 'پرداختی',
   seller_dashboard: 'داشبورد فروشنده',
   register_first_sale: '+ ثبت اولین فروش',
   no_sales_yet: 'هنوز فروشی ثبت نشده',
   no_allocations_yet: 'هنوز تخصیصی ثبت نشده',
-  no_payments_yet: 'هنوز دریافتی ثبت نشده',
+  no_payments_yet: 'هنوز پرداختی ثبت نشده',
   recent_sales: '💰 فروش‌های اخیر',
   stock_allocations: '🔀 تخصیص موجودی',
-  seller_payments: '💳 دریافتی‌های مالک از فروشندگان',
+  seller_payments: '💳 پرداختی‌های شما به مالک',
   personal_expenses_card: '💸 مصارف شخصی',
   personal_tracking_only: 'این مصارف صرفاً برای کنترل شخصی شما ثبت شده و در محاسبه بدهی یا حساب سیستم تأثیر ندارد.',
   performance_summary: '📊 خلاصه کل عملکرد',
@@ -638,7 +674,7 @@ const fa: Translations = {
   owner_owes_label: 'مالک بدهکار',
   all_sales: 'همه فروش‌ها →',
   all_allocations: 'همه →',
-  all_payments: 'همه دریافتی‌ها →',
+  all_payments: 'همه پرداختی‌ها →',
   all_expenses_link: 'همه مصارف →',
   month: 'ماه',
   txns: 'تراکنش',
@@ -738,13 +774,38 @@ const fa: Translations = {
   password_wrong: 'رمز عبور فعلی نادرست است.',
 
   // Payments
-  your_payments_to_owner: 'دریافتی‌های مالک از شما',
+  your_payments_to_owner: 'پرداختی‌های شما به مالک',
+  seller_paid_to_owner: 'پرداختی به مالک',
 
   // Investor dashboard
   capital_invested: 'سرمایه گذاری شده',
   total_expenses_investor: 'مجموع مصارف',
   net_capital: 'سرمایه موجود',
   investor_formula_label: '📐 فرمول مالی سرمایه‌گذار',
+  // Sale edit
+  edit_sale: 'ویرایش فروش',
+  edit_sale_title: '✏️ ویرایش فروش',
+  sale_edit_note: 'توجه: ویرایش فروش کمیسیون را به‌صورت خودکار محاسبه مجدد می‌کند.',
+  // Payment edit request
+  edit_payment: 'ویرایش پرداختی',
+  request_edit: 'درخواست ویرایش',
+  edit_request_sent: '✅ درخواست ویرایش ارسال شد. منتظر تأیید ادمین.',
+  edit_requests: '📋 درخواست‌های ویرایش',
+  pending_requests: 'درخواست‌های در انتظار',
+  no_requests: 'درخواست ویرایشی موجود نیست.',
+  approve: 'تأیید',
+  reject: 'رد کردن',
+  admin_notes: 'یادداشت ادمین',
+  request_status: 'وضعیت',
+  status_pending: '🕐 در انتظار',
+  status_approved: '✅ تأیید شده',
+  status_rejected: '❌ رد شده',
+  old_value: 'مقدار قبلی',
+  new_value: 'مقدار پیشنهادی',
+  payment_edit_request: 'درخواست ویرایش پرداختی',
+  request_pending_notice: '⏳ یک درخواست ویرایش در انتظار تأیید وجود دارد.',
+  edit_request_title: '📝 درخواست ویرایش پرداختی',
+  register_payment_seller: '+ ثبت پرداختی',
 };
 
 // ── PASHTO (ps) ───────────────────────────────────────────
@@ -885,6 +946,7 @@ const ps: Translations = {
   add_allocation: 'تخصیص اضافه کول',
   add_sale: 'پلور ثبتول',
   add_payment: 'تادیه اضافه کول',
+  add_payment_seller: 'تادیه اضافه کول',
   add_branch: 'څانګه اضافه کول',
   add_package: 'پکیج اضافه کول',
   add_seller: 'پلورونکی اضافه کول',
@@ -1062,6 +1124,30 @@ const ps: Translations = {
 
   // Seller paid to owner
   seller_paid_to_owner: 'د مالک ته تادیه',
+  // Sale edit
+  edit_sale: 'پلور سمول',
+  edit_sale_title: '✏️ پلور سمول',
+  sale_edit_note: 'یادونه: د پلور سمول کمیشن اتوماتیک بیا محاسبه کوي.',
+  // Payment edit request
+  edit_payment: 'تادیه سمول',
+  request_edit: 'د سمولو غوښتنه',
+  edit_request_sent: '✅ د سمولو غوښتنه واستول شوه. د ادمین تایید انتظار.',
+  edit_requests: '📋 د سمولو غوښتنې',
+  pending_requests: 'انتظار لرونکې غوښتنې',
+  no_requests: 'هیڅ د سمولو غوښتنه نشته.',
+  approve: 'تایید',
+  reject: 'رد کول',
+  admin_notes: 'د ادمین یادداشت',
+  request_status: 'حالت',
+  status_pending: '🕐 انتظار',
+  status_approved: '✅ تایید شوې',
+  status_rejected: '❌ رد شوې',
+  old_value: 'پخوانی مقدار',
+  new_value: 'وړاندیز شوی مقدار',
+  payment_edit_request: 'د تادیې د سمولو غوښتنه',
+  request_pending_notice: '⏳ د دې تادیې لپاره یوه انتظار لرونکې غوښتنه شته.',
+  edit_request_title: '📝 د تادیې د سمولو غوښتنه',
+  register_payment_seller: '+ تادیه ثبتول',
 };
 
 const translations: Record<Lang, Translations> = { en, fa, ps };
