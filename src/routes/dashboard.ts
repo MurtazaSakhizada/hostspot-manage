@@ -253,6 +253,37 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
       </table>
     </div>` : `<div class="empty-state"><div class="empty-state-icon">👥</div><h3>${t(lang,'no_data')}</h3></div>`}
   </div>
+
+  <!-- Formula Banner — at the bottom of the page -->
+  <div class="formula-strip" style="margin-top:.5rem">
+    <div class="formula-strip-group">
+      <span style="color:#94a3b8;font-size:.7rem">ناخالص فروش</span>
+      <span style="color:#e2e8f0;font-weight:700">${formatMoney(sls?.gross ?? 0)}</span>
+      <span class="formula-strip-sep">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">کمیسیون‌ها</span>
+      <span style="color:#fbbf24;font-weight:700">${formatMoney(sls?.comm ?? 0)}</span>
+      <span class="formula-strip-sep">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">پول خرید</span>
+      <span style="color:#f97316;font-weight:700">${formatMoney(allocPurchaseCost)}</span>
+      <span class="formula-strip-sep">=</span>
+      <span style="color:#94a3b8;font-size:.7rem">سود خالص مالک</span>
+      <span style="color:${(sls?.gross??0)-(sls?.comm??0)-allocPurchaseCost>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney((sls?.gross??0)-(sls?.comm??0)-allocPurchaseCost)}</span>
+    </div>
+    <div class="formula-strip-divider"></div>
+    <div class="formula-strip-group">
+      <span style="color:#94a3b8;font-size:.7rem">دریافتی از فروشندگان</span>
+      <span style="color:#34d399;font-weight:700">${formatMoney(totalPaidBySellers)}</span>
+      <span class="formula-strip-sep">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">پول خرید</span>
+      <span style="color:#f97316;font-weight:700">${formatMoney(allocPurchaseCost)}</span>
+      <span class="formula-strip-sep">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">مصارف</span>
+      <span style="color:#fb923c;font-weight:700">${formatMoney(totalExpenses)}</span>
+      <span class="formula-strip-sep">=</span>
+      <span style="color:#94a3b8;font-size:.7rem">سرمایه موجود</span>
+      <span style="color:${availableCapital>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney(availableCapital)}</span>
+    </div>
+  </div>
   `;
 }
 
@@ -638,7 +669,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
   <!-- ══════════════════════════════════════════
        ROW 2 – CHART + MONTHLY TREND
   ══════════════════════════════════════════ -->
-  <div class="dash-chart-row">
+  <div class="grid-chart-trend">
 
     <!-- Chart: Last 7 days -->
     <div class="card">
@@ -726,7 +757,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
   <!-- ══════════════════════════════════════════
        ROW 4 – ALLOCATIONS + PAYMENTS
   ══════════════════════════════════════════ -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
+  <div class="grid-2col">
 
     <!-- Allocations -->
     <div class="card">
@@ -837,42 +868,42 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
   <!-- ══════════════════════════════════════════
        ROW 5 – ALL-TIME SUMMARY BANNER
   ══════════════════════════════════════════ -->
-  <div style="background:linear-gradient(135deg,#1e1b4b,#312e81);border-radius:12px;padding:1rem 1.5rem;margin-bottom:1rem">
+  <div class="formula-banner">
     <div style="color:#a5b4fc;font-size:.75rem;font-weight:600;margin-bottom:.6rem;letter-spacing:.05em">📊 خلاصه کل عملکرد</div>
-    <div style="display:flex;flex-wrap:wrap;gap:1.5rem;align-items:center">
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.72rem">ارزش تخصیص</div>
-        <div style="color:#e2e8f0;font-weight:700;font-size:1rem">${formatMoney(allocValue)}</div>
+    <div class="formula-banner-inner">
+      <div class="formula-item">
+        <div class="formula-label">ارزش تخصیص</div>
+        <div class="formula-value" style="color:#e2e8f0">${formatMoney(allocValue)}</div>
       </div>
-      <div style="color:#475569">−</div>
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.72rem">کمیشن کسبی</div>
-        <div style="color:#fbbf24;font-weight:700;font-size:1rem">${formatMoney(allTimeComm)}</div>
+      <span class="formula-sep">−</span>
+      <div class="formula-item">
+        <div class="formula-label">کمیشن کسبی</div>
+        <div class="formula-value" style="color:#fbbf24">${formatMoney(allTimeComm)}</div>
       </div>
-      <div style="color:#475569">−</div>
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.72rem">پرداختی به مالک</div>
-        <div style="color:#34d399;font-weight:700;font-size:1rem">${formatMoney(totalPaid)}</div>
+      <span class="formula-sep">−</span>
+      <div class="formula-item">
+        <div class="formula-label">پرداختی به مالک</div>
+        <div class="formula-value" style="color:#34d399">${formatMoney(totalPaid)}</div>
       </div>
-      <div style="color:#475569">=</div>
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.72rem">${debt > 0 ? 'بدهی به مالک' : 'مالک بدهکار'}</div>
-        <div style="color:${balanceColor};font-weight:700;font-size:1.1rem">${balanceSign}${formatMoney(Math.abs(debt))}</div>
+      <span class="formula-sep">=</span>
+      <div class="formula-item">
+        <div class="formula-label">${debt > 0 ? 'بدهی به مالک' : 'مالک بدهکار'}</div>
+        <div class="formula-value" style="color:${balanceColor};font-size:1.1rem">${balanceSign}${formatMoney(Math.abs(debt))}</div>
       </div>
-      <div style="width:1px;height:40px;background:#334155;margin:0 .5rem"></div>
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.72rem">کل تخصیص شده</div>
-        <div style="color:#818cf8;font-weight:700;font-size:1rem">${formatGB(allocTotals?.gb ?? 0)}</div>
+      <div class="formula-divider"></div>
+      <div class="formula-item">
+        <div class="formula-label">کل تخصیص شده</div>
+        <div class="formula-value" style="color:#818cf8">${formatGB(allocTotals?.gb ?? 0)}</div>
       </div>
-      <div style="color:#475569">→</div>
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.72rem">فروخته</div>
-        <div style="color:#4ade80;font-weight:700;font-size:1rem">${formatGB(allTimeGb)}</div>
+      <span class="formula-sep">→</span>
+      <div class="formula-item">
+        <div class="formula-label">فروخته</div>
+        <div class="formula-value" style="color:#4ade80">${formatGB(allTimeGb)}</div>
       </div>
-      <div style="color:#475569">→</div>
-      <div style="text-align:center">
-        <div style="color:#94a3b8;font-size:.72rem">باقی</div>
-        <div style="color:#e2e8f0;font-weight:700;font-size:1rem">${formatGB(remainingGb)}</div>
+      <span class="formula-sep">→</span>
+      <div class="formula-item">
+        <div class="formula-label">باقی</div>
+        <div class="formula-value" style="color:#e2e8f0">${formatGB(remainingGb)}</div>
       </div>
     </div>
   </div>
@@ -1239,38 +1270,7 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
     </div>
   </div>
 
-  <!-- COMPACT FORMULA STRIP -->
-  <div style="background:linear-gradient(135deg,#0f172a,#1e293b);border-radius:12px;padding:.875rem 1.25rem;margin-bottom:1.25rem;border:1px solid #334155;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:.82rem">
-    <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
-      <span style="color:#94a3b8;font-size:.7rem">ناخالص</span>
-      <span style="color:#e2e8f0;font-weight:700">${formatMoney(totalGross)}</span>
-      <span style="color:#475569">−</span>
-      <span style="color:#94a3b8;font-size:.7rem">کمیسیون</span>
-      <span style="color:#fbbf24;font-weight:700">${formatMoney(totalCommission)}</span>
-      <span style="color:#475569">−</span>
-      <span style="color:#94a3b8;font-size:.7rem">خرید</span>
-      <span style="color:#f97316;font-weight:700">${formatMoney(totalPurchaseCost)}</span>
-      <span style="color:#475569">=</span>
-      <span style="color:#94a3b8;font-size:.7rem">سود خالص</span>
-      <span style="color:${ownerNetProfit>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney(ownerNetProfit)}</span>
-    </div>
-    <div style="width:1px;height:28px;background:#334155;margin:0 .5rem"></div>
-    <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
-      <span style="color:#94a3b8;font-size:.7rem">دریافتی</span>
-      <span style="color:#34d399;font-weight:700">${formatMoney(totalPaid)}</span>
-      <span style="color:#475569">−</span>
-      <span style="color:#94a3b8;font-size:.7rem">خرید</span>
-      <span style="color:#f97316;font-weight:700">${formatMoney(totalPurchaseCost)}</span>
-      <span style="color:#475569">−</span>
-      <span style="color:#94a3b8;font-size:.7rem">مصارف</span>
-      <span style="color:#fb923c;font-weight:700">${formatMoney(totalExpenses)}</span>
-      <span style="color:#475569">=</span>
-      <span style="color:#94a3b8;font-size:.7rem">سرمایه موجود</span>
-      <span style="color:${availableCapital>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney(availableCapital)}</span>
-    </div>
-  </div>
-
-  <!-- 6 KPI CARDS -->
+  <!-- 6 KPI CARDS (formula strip moved to bottom) -->
   <div class="stats-grid" style="margin-bottom:1.25rem">
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#7c3aed"></div>
@@ -1311,7 +1311,7 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
   </div>
 
   <!-- CHART (7-day) + MONTHLY TREND (6 months) -->
-  <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:1rem;margin-bottom:1.25rem">
+  <div class="grid-chart-trend">
 
     <!-- 7-Day Payments Bar Chart -->
     <div class="card">
@@ -1387,7 +1387,7 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
   </div>
 
   <!-- TWO-COLUMN: RECENT ALLOCATIONS + RECENT PAYMENTS -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
+  <div class="grid-2col">
     <div class="card">
       <div class="card-header">
         <div class="card-title">🔀 آخرین تخصیص‌ها</div>
@@ -1417,6 +1417,37 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
           <tbody>${recentPayRows}</tbody>
         </table>
       </div>` : `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">💰</div><h3>بدون دریافتی</h3></div>`}
+    </div>
+  </div>
+
+  <!-- FORMULA STRIP (moved to bottom) -->
+  <div class="formula-strip">
+    <div class="formula-strip-group">
+      <span style="color:#94a3b8;font-size:.7rem">ناخالص</span>
+      <span style="color:#e2e8f0;font-weight:700">${formatMoney(totalGross)}</span>
+      <span class="formula-strip-sep">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">کمیسیون</span>
+      <span style="color:#fbbf24;font-weight:700">${formatMoney(totalCommission)}</span>
+      <span class="formula-strip-sep">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">خرید</span>
+      <span style="color:#f97316;font-weight:700">${formatMoney(totalPurchaseCost)}</span>
+      <span class="formula-strip-sep">=</span>
+      <span style="color:#94a3b8;font-size:.7rem">سود خالص</span>
+      <span style="color:${ownerNetProfit>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney(ownerNetProfit)}</span>
+    </div>
+    <div class="formula-strip-divider"></div>
+    <div class="formula-strip-group">
+      <span style="color:#94a3b8;font-size:.7rem">دریافتی</span>
+      <span style="color:#34d399;font-weight:700">${formatMoney(totalPaid)}</span>
+      <span class="formula-strip-sep">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">خرید</span>
+      <span style="color:#f97316;font-weight:700">${formatMoney(totalPurchaseCost)}</span>
+      <span class="formula-strip-sep">−</span>
+      <span style="color:#94a3b8;font-size:.7rem">مصارف</span>
+      <span style="color:#fb923c;font-weight:700">${formatMoney(totalExpenses)}</span>
+      <span class="formula-strip-sep">=</span>
+      <span style="color:#94a3b8;font-size:.7rem">سرمایه موجود</span>
+      <span style="color:${availableCapital>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney(availableCapital)}</span>
     </div>
   </div>
 

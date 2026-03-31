@@ -1116,6 +1116,82 @@ tbody tr:hover td { background: var(--bg-soft); }
 .bottom-nav-icon { font-size: 1.25rem; line-height: 1; }
 .bottom-nav-label { font-size: 0.6rem; }
 
+/* ══════════════════════════════════════════════
+   DASHBOARD RESPONSIVE GRID UTILITIES
+   ══════════════════════════════════════════════ */
+
+/* Two-column grid that stacks on mobile */
+.grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+/* Chart + trend: wider left column */
+.grid-chart-trend {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+/* Formula/summary banner at bottom */
+.formula-banner {
+  background: linear-gradient(135deg, #1e1b4b, #312e81);
+  border-radius: 12px;
+  padding: 1rem 1.5rem;
+  margin-bottom: 1rem;
+  overflow-x: auto;
+}
+.formula-banner-inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  align-items: center;
+  min-width: 0;
+}
+.formula-item { text-align: center; min-width: 0; }
+.formula-label { color: #94a3b8; font-size: .72rem; white-space: nowrap; }
+.formula-value { font-weight: 700; font-size: 1rem; white-space: nowrap; }
+.formula-sep { color: #475569; font-size: 1.1rem; flex-shrink: 0; }
+.formula-divider { width: 1px; height: 40px; background: #334155; margin: 0 .5rem; flex-shrink: 0; }
+
+/* Compact formula strip (investor) */
+.formula-strip {
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+  border-radius: 12px;
+  padding: .875rem 1.25rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid #334155;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+  font-size: .82rem;
+  overflow-x: auto;
+}
+.formula-strip-group {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  flex-wrap: wrap;
+}
+.formula-strip-sep { color: #475569; }
+.formula-strip-divider { width: 1px; height: 28px; background: #334155; margin: 0 .5rem; flex-shrink: 0; }
+
+@media (max-width: 768px) {
+  .grid-2col { grid-template-columns: 1fr; }
+  .grid-chart-trend { grid-template-columns: 1fr; }
+  .formula-banner { padding: .875rem 1rem; }
+  .formula-banner-inner { gap: .875rem; }
+  .formula-strip { flex-direction: column; align-items: flex-start; gap: .4rem; }
+  .formula-strip-divider { display: none; }
+  .formula-strip-group { width: 100%; }
+}
+@media (max-width: 480px) {
+  .grid-2col { gap: .625rem; }
+  .formula-banner-inner { gap: .75rem; }
+}
+
 /* ── PWA Install Banner ───────────────────────── */
 .pwa-install-banner {
   position: fixed;
