@@ -1,5 +1,6 @@
 // ============================================
 // Dashboard Routes - Owner & Seller
+// Period filter defaults to 'today'
 // ============================================
 import { Hono } from 'hono';
 import { t, type Lang } from '../lib/i18n';
@@ -7,278 +8,312 @@ import type { SessionUser } from '../lib/auth';
 import { parseCookies } from '../lib/auth';
 import { pageShell } from '../lib/layout';
 import { formatGB, formatMoney } from '../lib/calc';
-import { getCompanyLedgerSummary, getAllSellerBalances, getSellerLedger } from '../lib/ledger';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
 
 const dashboard = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-// ============================================================
-// OWNER DASHBOARD
-// Formula:
-//   Net Profit = Gross Revenue - Commissions - Purchase Cost
-//   Available Capital = Net Profit - Total Expenses
-// ============================================================
-async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Promise<string> {
+// ── helpers ──────────────────────────────────────────────────
+function periodLabel(p: string) {
+  return p === 'today' ? 'امروز'
+       : p === 'week'  ? 'این هفته'
+       : p === 'month' ? 'این ماه'
+       : p === 'year'  ? 'امسال'
+       : 'همه وقت';
+}
 
-  // ── Company purchase price ───────────────────────────────
+function periodDateFilter(p: string, col = 'snapshot_time') {
+  if (p === 'today') return `AND date(${col}) = date('now')`;
+  if (p === 'week')  return `AND ${col} >= datetime('now','-7 days')`;
+  if (p === 'month') return `AND ${col} >= datetime('now','-30 days')`;
+  if (p === 'year')  return `AND ${col} >= datetime('now','-365 days')`;
+  return '';
+}
+
+function periodBtns(current: string, base = '/dashboard') {
+  return ['today','week','month','year','all'].map(p => `
+    <a href="${base}?period=${p}"
+       class="btn btn-sm ${current===p ? 'btn-primary' : 'btn-outline'}"
+       style="white-space:nowrap">
+      ${ p==='today' ? '📅 امروز'
+       : p==='week'  ? '📅 هفته'
+       : p==='month' ? '📅 ماه'
+       : p==='year'  ? '📅 سال'
+       :               '📅 همه'}
+    </a>`).join('');
+}
+
+function fdate(d: string) {
+  return new Date(d).toLocaleDateString('en-GB', { day:'2-digit', month:'short' });
+}
+
+// ============================================================
+// OWNER DASHBOARD  — simplified, period-aware KPI cards
+// ============================================================
+async function ownerDashboard(
+  db: D1Database, user: SessionUser, lang: Lang, period: string
+): Promise<string> {
+
   const company = await db.prepare('SELECT name, settings FROM companies WHERE id=?')
     .bind(user.company_id).first<any>();
   const settings = JSON.parse(company?.settings || '{}');
   const purchasePricePerGb: number = settings.purchase_price_per_gb ?? 0;
 
-  // ── Sales totals ─────────────────────────────────────────
-  const sls = await db.prepare(`
-    SELECT COALESCE(SUM(total_gb),0) as gb,
-           COALESCE(SUM(gross_amount),0) as gross,
-           COALESCE(SUM(commission_amount),0) as comm,
-           COALESCE(SUM(net_amount),0) as net,
-           COUNT(*) as cnt
-    FROM sales WHERE company_id=?`).bind(user.company_id).first<any>();
+  const pf  = periodDateFilter(period);          // snapshot_time filter
+  const pfP = periodDateFilter(period, 'payment_date'); // payment_date filter
+  const pfE = periodDateFilter(period, 'expense_date');
 
-  // ── Inventory totals ─────────────────────────────────────
-  const invBatch = await db.prepare(`
-    SELECT COALESCE(SUM(total_gb),0) as gb,
-           COALESCE(SUM(total_gross),0) as gross,
-           COALESCE(SUM(purchase_cost),0) as purchase_cost
-    FROM inventory_batches WHERE company_id=?`).bind(user.company_id).first<any>();
+  // ── Parallel queries ──────────────────────────────────────
+  const [slsPeriod, invBatch, alloc, expTotal, payTotal, sellers, branches] = await Promise.all([
 
-  // ── Allocations — use allocation_batches (source of truth, NOT old allocations table)
-  const alloc = await db.prepare(`
-    SELECT COALESCE(SUM(total_gb),0)         as gb,
-           COALESCE(SUM(total_gross),0)      as gross,
-           COALESCE(SUM(total_commission),0) as commission,
-           COALESCE(SUM(total_net),0)        as net
-    FROM allocation_batches WHERE company_id=?`).bind(user.company_id).first<any>();
+    // 1. Sales in period
+    db.prepare(`
+      SELECT COALESCE(SUM(total_gb),0) as gb,
+             COALESCE(SUM(gross_amount),0) as gross,
+             COALESCE(SUM(commission_amount),0) as comm,
+             COUNT(*) as cnt
+      FROM sales WHERE company_id=? ${pf}`)
+      .bind(user.company_id).first<any>(),
 
-  // ── Expenses (COMPANY ONLY: seller_id IS NULL) ──────────────
-  // Seller personal expenses are EXCLUDED from owner profit/capital
-  const expTotal = await db.prepare(`
-    SELECT COALESCE(SUM(amount),0) as total FROM expenses
-    WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0)`)
-    .bind(user.company_id).first<{total:number}>();
+    // 2. Inventory (all-time stock — period-independent)
+    db.prepare(`
+      SELECT COALESCE(SUM(total_gb),0) as gb,
+             COALESCE(SUM(purchase_cost),0) as purchase_cost
+      FROM inventory_batches WHERE company_id=?`)
+      .bind(user.company_id).first<any>(),
 
-  // ── Payments (received FROM sellers by owner) ──────────────
-  const payTotal = await db.prepare(`
-    SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE company_id=?`)
-    .bind(user.company_id).first<{total:number}>();
+    // 3. Allocations all-time (for stockGb calc)
+    db.prepare(`
+      SELECT COALESCE(SUM(total_gb),0) as gb,
+             COALESCE(SUM(total_gross),0) as gross
+      FROM allocation_batches WHERE company_id=?`)
+      .bind(user.company_id).first<any>(),
 
-  // ── Formula calculations ──────────────────────────────────
-  const soldGb = sls?.gb ?? 0;
-  const allocGb = alloc?.gb ?? 0;
-  const purchaseCost = invBatch?.purchase_cost ?? 0;
+    // 4. Company expenses in period
+    db.prepare(`
+      SELECT COALESCE(SUM(amount),0) as total FROM expenses
+      WHERE company_id=? AND (seller_id IS NULL OR seller_id=0) ${pfE}`)
+      .bind(user.company_id).first<{total:number}>(),
 
-  // Purchase cost of ALL allocated GB × price per GB
+    // 5. Payments received in period
+    db.prepare(`
+      SELECT COALESCE(SUM(amount),0) as total FROM payments
+      WHERE company_id=? ${pfP}`)
+      .bind(user.company_id).first<{total:number}>(),
+
+    // 6. Per-seller summary (all-time debt)
+    db.prepare(`
+      SELECT u.id, u.full_name, u.commission_rate,
+        COALESCE(SUM(s.total_gb),0) as sold_gb,
+        COALESCE(SUM(s.gross_amount),0) as gross,
+        COALESCE(SUM(s.commission_amount),0) as comm,
+        COUNT(s.id) as tx_count,
+        COALESCE((SELECT SUM(amount) FROM payments p WHERE p.seller_id=u.id AND p.company_id=u.company_id),0) as paid,
+        COALESCE((SELECT SUM(total_gross) FROM allocation_batches ab WHERE ab.seller_id=u.id AND ab.company_id=u.company_id),0) as alloc_value
+      FROM users u
+      LEFT JOIN sales s ON s.seller_id=u.id AND s.company_id=u.company_id
+      WHERE u.company_id=? AND u.role='seller' AND u.active=1
+      GROUP BY u.id ORDER BY sold_gb DESC`)
+      .bind(user.company_id).all<any>(),
+
+    // 7. Branch breakdown in period
+    db.prepare(`
+      SELECT b.name,
+        COALESCE(SUM(s.total_gb),0) as sold_gb,
+        COALESCE(SUM(s.gross_amount),0) as gross,
+        COALESCE(SUM(s.net_amount),0) as net,
+        COUNT(DISTINCT s.seller_id) as sellers
+      FROM branches b
+      LEFT JOIN sales s ON s.branch_id=b.id AND s.company_id=b.company_id
+        ${period==='today' ? "AND date(s.snapshot_time)=date('now')"
+        : period==='week'  ? "AND s.snapshot_time>=datetime('now','-7 days')"
+        : period==='month' ? "AND s.snapshot_time>=datetime('now','-30 days')"
+        : period==='year'  ? "AND s.snapshot_time>=datetime('now','-365 days')"
+        : ''}
+      WHERE b.company_id=?
+      GROUP BY b.id, b.name ORDER BY sold_gb DESC`)
+      .bind(user.company_id).all<any>(),
+  ]);
+
+  // ── Derived values ────────────────────────────────────────
+  const soldGb          = slsPeriod?.gb ?? 0;
+  const totalStock      = invBatch?.gb ?? 0;
+  const allocGb         = alloc?.gb ?? 0;
+  const purchaseCost    = invBatch?.purchase_cost ?? 0;
+  const stockRemaining  = Math.max(0, totalStock - allocGb);
+
   const allocPurchaseCost = purchasePricePerGb > 0
     ? Math.round(allocGb * purchasePricePerGb * 100) / 100
-    : (purchaseCost > 0 && invBatch?.gb > 0
+    : purchaseCost > 0 && invBatch?.gb > 0
       ? Math.round((allocGb / (invBatch?.gb || 1)) * purchaseCost * 100) / 100
-      : 0);
+      : 0;
 
   const totalExpenses      = expTotal?.total ?? 0;
   const totalPaidBySellers = payTotal?.total ?? 0;
+  const availableCapital   = totalPaidBySellers - allocPurchaseCost - totalExpenses;
 
-  // Available Capital = دریافتی از فروشندگان − پول خرید (تخصیص‌شده) − مصارف
-  const availableCapital = totalPaidBySellers - allocPurchaseCost - totalExpenses;
-
-  // Stock GB remaining
-  const stockGb = (invBatch?.gb ?? 0) - soldGb;
-
-  // ── Branch drill-down ────────────────────────────────────
-  const branches = await db.prepare(`
-    SELECT b.id, b.name,
-      COALESCE(SUM(s.total_gb),0) as sold_gb,
-      COALESCE(SUM(s.gross_amount),0) as gross,
-      COALESCE(SUM(s.commission_amount),0) as comm,
-      COALESCE(SUM(s.net_amount),0) as net,
-      COUNT(DISTINCT s.seller_id) as sellers
-    FROM branches b
-    LEFT JOIN sales s ON s.branch_id=b.id AND s.company_id=b.company_id
-    WHERE b.company_id=?
-    GROUP BY b.id, b.name ORDER BY sold_gb DESC`).bind(user.company_id).all<any>();
-
-  // ── Per seller (includes allocation value for debt calculation) ──────────
-  const sellers = await db.prepare(`
-    SELECT u.id, u.full_name, u.commission_rate,
-      COALESCE(SUM(s.total_gb),0) as sold_gb,
-      COALESCE(SUM(s.gross_amount),0) as gross,
-      COALESCE(SUM(s.commission_amount),0) as comm,
-      COALESCE(SUM(s.net_amount),0) as net,
-      COUNT(s.id) as tx_count,
-      COALESCE((SELECT SUM(amount) FROM payments p WHERE p.seller_id=u.id AND p.company_id=u.company_id),0) as paid,
-      COALESCE((SELECT SUM(total_gross) FROM allocation_batches ab WHERE ab.seller_id=u.id AND ab.company_id=u.company_id),0) as alloc_value
-    FROM users u
-    LEFT JOIN sales s ON s.seller_id=u.id AND s.company_id=u.company_id
-    WHERE u.company_id=? AND u.role='seller' AND u.active=1
-    GROUP BY u.id, u.full_name, u.commission_rate ORDER BY sold_gb DESC`)
-    .bind(user.company_id).all<any>();
-
-
-
-  // ── HTML building ─────────────────────────────────────────
+  // ── Seller rows ───────────────────────────────────────────
   const sellerRows = (sellers.results||[]).map((s: any) => {
-    // debt = alloc_value - commission_earned - paid_to_seller
-    // debt > 0 → seller still owes owner; debt <= 0 → owner owes seller (overpaid)
     const debt = s.alloc_value - s.comm - s.paid;
-    const debtLabel = debt > 0
-      ? `<span style="color:var(--danger)">${t(lang,'debt_label')}: ${formatMoney(debt)}</span>`
+    const debtHtml = debt > 0
+      ? `<span style="color:var(--danger);font-weight:600">${formatMoney(debt)}</span>`
       : debt < 0
-      ? `<span style="color:var(--success)">${t(lang,'credit_label')}: ${formatMoney(Math.abs(debt))}</span>`
-      : `<span style="color:var(--text-muted)">${t(lang,'settled_label')}</span>`;
-    return `
-    <tr>
+      ? `<span style="color:var(--success);font-weight:600">+${formatMoney(Math.abs(debt))}</span>`
+      : `<span style="color:var(--text-muted)">تسویه</span>`;
+    return `<tr>
       <td><strong>${s.full_name}</strong></td>
       <td><span class="badge badge-info">${Math.round(s.commission_rate*100)}%</span></td>
-      <td class="text-primary font-bold">${formatGB(s.sold_gb)}</td>
-      <td>${formatMoney(s.gross)}</td>
-      <td class="text-warning">${formatMoney(s.comm)}</td>
-      <td style="color:#0891b2">${formatMoney(s.alloc_value)}</td>
-      <td class="text-success font-bold">${formatMoney(s.paid)}</td>
-      <td>${s.tx_count}</td>
-      <td style="font-weight:600">${debtLabel}</td>
+      <td class="text-primary">${formatGB(s.sold_gb)}</td>
+      <td>${formatMoney(s.alloc_value)}</td>
+      <td class="text-success">${formatMoney(s.paid)}</td>
+      <td>${debtHtml}</td>
+      <td><a href="/payments?seller_id=${s.id}" class="btn btn-outline btn-sm">💰</a></td>
     </tr>`;
   }).join('');
 
-  const branchRows = (branches.results||[]).map((b: any, i: number) => `
+  // ── Branch rows ───────────────────────────────────────────
+  const branchRows = (branches.results||[]).filter((b:any)=>b.sold_gb>0).map((b: any) => `
     <tr>
       <td><strong>${b.name}</strong></td>
-      <td class="text-primary font-bold">${formatGB(b.sold_gb)}</td>
+      <td class="text-primary">${formatGB(b.sold_gb)}</td>
       <td>${formatMoney(b.gross)}</td>
-      <td class="text-warning">${formatMoney(b.comm)}</td>
-      <td class="text-success font-bold">${formatMoney(b.net)}</td>
-      <td>${b.sellers}</td>
+      <td class="text-success">${formatMoney(b.net)}</td>
+      <td style="color:var(--text-muted)">${b.sellers}</td>
     </tr>`).join('');
 
+  const pl = periodLabel(period);
+
   return `
+  <!-- Page Header -->
   <div class="page-header">
     <div>
       <div class="page-title">📊 ${t(lang,'dashboard')}</div>
-      <div class="page-subtitle">${company?.name ?? ''} · ${t(lang,'all_time')}</div>
+      <div class="page-subtitle">${company?.name ?? ''} · ${pl}</div>
     </div>
     <div class="btn-group">
-      <a href="/reports" class="btn btn-outline btn-sm">📋 ${t(lang,'reports')}</a>
-      <a href="/inventory/add" class="btn btn-primary btn-sm">+ ${t(lang,'add_inventory')}</a>
+      <a href="/reports" class="btn btn-outline btn-sm">📋 گزارش</a>
+      <a href="/inventory/add" class="btn btn-primary btn-sm">+ موجودی</a>
     </div>
   </div>
 
-  <!-- PRIMARY KPIs — 6 cards -->
+  <!-- Period Filter -->
+  <div style="margin-bottom:1.25rem;display:flex;gap:.4rem;flex-wrap:wrap">
+    ${periodBtns(period)}
+  </div>
+
+  <!-- 6 KPI Cards -->
   <div class="stats-grid" style="margin-bottom:1.25rem">
-    <!-- موجودی انبار -->
+
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--primary)"></div>
-      <div class="stat-label">${t(lang,'total_inventory_gb')}</div>
-      <div class="stat-value primary">${formatGB(invBatch?.gb ?? 0)}</div>
-      <div class="stat-sub">${formatGB(stockGb)} ${t(lang,'remaining')}</div>
+      <div class="stat-label">📦 موجودی انبار</div>
+      <div class="stat-value primary">${formatGB(totalStock)}</div>
+      <div class="stat-sub">${formatGB(stockRemaining)} باقی‌مانده</div>
     </div>
-    <!-- تخصیص شده -->
+
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#7c3aed"></div>
-      <div class="stat-label">${t(lang,'allocated_gb')}</div>
-      <div class="stat-value" style="color:#7c3aed">${formatGB(alloc?.gb ?? 0)}</div>
-      <div class="stat-sub">${formatMoney(alloc?.gross ?? 0)} ${t(lang,'gross')}</div>
+      <div class="stat-label">🔀 تخصیص داده شده</div>
+      <div class="stat-value" style="color:#7c3aed">${formatGB(allocGb)}</div>
+      <div class="stat-sub">${formatMoney(alloc?.gross ?? 0)} ارزش</div>
     </div>
-    <!-- فروش شده -->
+
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--success)"></div>
-      <div class="stat-label">${t(lang,'sold_gb')}</div>
+      <div class="stat-label">📤 فروش · ${pl}</div>
       <div class="stat-value success">${formatGB(soldGb)}</div>
-      <div class="stat-sub">${sls?.cnt ?? 0} ${t(lang,'transactions')}</div>
+      <div class="stat-sub">${slsPeriod?.cnt ?? 0} معامله · ${formatMoney(slsPeriod?.gross ?? 0)}</div>
     </div>
-    <!-- دریافتی از فروشندگان -->
+
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#0891b2"></div>
-      <div class="stat-label">💰 ${t(lang,'total_received')}</div>
+      <div class="stat-label">💰 دریافتی · ${pl}</div>
       <div class="stat-value" style="color:#0891b2">${formatMoney(totalPaidBySellers)}</div>
-      <div class="stat-sub">${t(lang,'received_from_sellers')}</div>
+      <div class="stat-sub">از فروشندگان</div>
     </div>
-    <!-- مصارف -->
+
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#f97316"></div>
-      <div class="stat-label">${t(lang,'total_expenses')}</div>
+      <div class="stat-label">💸 مصارف · ${pl}</div>
       <div class="stat-value" style="color:#f97316">${formatMoney(totalExpenses)}</div>
-      <div class="stat-sub"><a href="/expenses" style="color:var(--primary);font-size:.75rem">${t(lang,'manage')}</a></div>
+      <div class="stat-sub"><a href="/expenses" style="color:var(--primary);font-size:.75rem">مدیریت →</a></div>
     </div>
-    <!-- سرمایه موجود -->
-    <div class="stat-card" style="background:${availableCapital>=0?'linear-gradient(135deg,var(--success-light,#dcfce7),var(--bg-secondary))':'linear-gradient(135deg,#fee2e2,var(--bg-secondary))'}">
+
+    <div class="stat-card" style="background:${availableCapital>=0?'linear-gradient(135deg,#dcfce7,var(--bg-secondary))':'linear-gradient(135deg,#fee2e2,var(--bg-secondary))'}">
       <div class="stat-card-accent" style="background:${availableCapital>=0?'var(--success)':'var(--danger)'}"></div>
-      <div class="stat-label">${t(lang,'available_capital_card')}</div>
-      <div class="stat-value" style="color:${availableCapital>=0?'var(--success)':'var(--danger)'};font-size:1.35rem">${formatMoney(availableCapital)}</div>
+      <div class="stat-label">💎 سرمایه موجود</div>
+      <div class="stat-value" style="color:${availableCapital>=0?'var(--success)':'var(--danger)'}">${formatMoney(availableCapital)}</div>
       <div class="stat-sub">دریافتی − خرید − مصارف</div>
     </div>
-  </div>
 
-  <!-- Branch Breakdown -->
-  <div class="card" style="margin-bottom:1rem">
-    <div class="card-header">
-      <div class="card-title">🏢 ${t(lang,'by_branch')}</div>
-    </div>
-    ${(branches.results||[]).length ? `
-    <div class="table-wrapper">
-      <table>
-        <thead><tr>
-          <th>${t(lang,'branch')}</th>
-          <th>${t(lang,'sold_gb')}</th>
-          <th>${t(lang,'gross')}</th>
-          <th>${t(lang,'commission_amount')}</th>
-          <th>${t(lang,'net')}</th>
-          <th>${t(lang,'sellers')}</th>
-        </tr></thead>
-        <tbody>${branchRows}</tbody>
-      </table>
-    </div>` : `<div class="empty-state"><div class="empty-state-icon">🏢</div><h3>${t(lang,'no_data')}</h3></div>`}
   </div>
 
   <!-- Seller Performance -->
   <div class="card" style="margin-bottom:1rem">
     <div class="card-header">
-      <div class="card-title">${t(lang,'seller_performance')}</div>
-      <a href="/users" class="btn btn-outline btn-sm">${t(lang,'manage')}</a>
+      <div class="card-title">👥 عملکرد فروشندگان</div>
+      <a href="/users" class="btn btn-outline btn-sm">مدیریت</a>
     </div>
     ${(sellers.results||[]).length ? `
     <div class="table-wrapper">
       <table>
         <thead><tr>
-          <th>${t(lang,'seller')}</th>
-          <th>${t(lang,'commission_rate')}</th>
-          <th>${t(lang,'sold_gb')}</th>
-          <th>${t(lang,'total_gross')}</th>
-          <th>${t(lang,'commission_amount')}</th>
-          <th>${t(lang,'allocation_value')}</th>
-          <th>${t(lang,'total_received')}</th>
-          <th>${t(lang,'quantity')}</th>
-          <th>${t(lang,'debt_balance')}</th>
+          <th>فروشنده</th>
+          <th>نرخ</th>
+          <th>فروش (GB)</th>
+          <th>ارزش تخصیص</th>
+          <th>پرداختی</th>
+          <th>بدهی / اعتبار</th>
+          <th></th>
         </tr></thead>
         <tbody>${sellerRows}</tbody>
       </table>
     </div>` : `<div class="empty-state"><div class="empty-state-icon">👥</div><h3>${t(lang,'no_data')}</h3></div>`}
   </div>
 
-  <!-- Formula Banner — at the bottom of the page -->
-  <div class="formula-strip" style="margin-top:.5rem">
+  ${branchRows ? `
+  <!-- Branch Breakdown -->
+  <div class="card" style="margin-bottom:1rem">
+    <div class="card-header">
+      <div class="card-title">🏢 عملکرد شعبه‌ها · ${pl}</div>
+    </div>
+    <div class="table-wrapper">
+      <table>
+        <thead><tr>
+          <th>شعبه</th>
+          <th>فروش (GB)</th>
+          <th>ناخالص</th>
+          <th>خالص</th>
+          <th>فروشندگان</th>
+        </tr></thead>
+        <tbody>${branchRows}</tbody>
+      </table>
+    </div>
+  </div>` : ''}
+
+  <!-- Formula Strip (bottom) -->
+  <div class="formula-strip">
     <div class="formula-strip-group">
       <span style="color:#94a3b8;font-size:.7rem">ناخالص فروش</span>
-      <span style="color:#e2e8f0;font-weight:700">${formatMoney(sls?.gross ?? 0)}</span>
+      <span style="color:#e2e8f0;font-weight:700">${formatMoney(slsPeriod?.gross ?? 0)}</span>
       <span class="formula-strip-sep">−</span>
-      <span style="color:#94a3b8;font-size:.7rem">کمیسیون‌ها</span>
-      <span style="color:#fbbf24;font-weight:700">${formatMoney(sls?.comm ?? 0)}</span>
+      <span style="color:#94a3b8;font-size:.7rem">کمیسیون</span>
+      <span style="color:#fbbf24;font-weight:700">${formatMoney(slsPeriod?.comm ?? 0)}</span>
       <span class="formula-strip-sep">−</span>
       <span style="color:#94a3b8;font-size:.7rem">پول خرید</span>
       <span style="color:#f97316;font-weight:700">${formatMoney(allocPurchaseCost)}</span>
       <span class="formula-strip-sep">=</span>
-      <span style="color:#94a3b8;font-size:.7rem">سود خالص مالک</span>
-      <span style="color:${(sls?.gross??0)-(sls?.comm??0)-allocPurchaseCost>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney((sls?.gross??0)-(sls?.comm??0)-allocPurchaseCost)}</span>
+      <span style="color:#94a3b8;font-size:.7rem">سود خالص</span>
+      <span style="color:${(slsPeriod?.gross??0)-(slsPeriod?.comm??0)-allocPurchaseCost>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney((slsPeriod?.gross??0)-(slsPeriod?.comm??0)-allocPurchaseCost)}</span>
     </div>
     <div class="formula-strip-divider"></div>
     <div class="formula-strip-group">
-      <span style="color:#94a3b8;font-size:.7rem">دریافتی از فروشندگان</span>
+      <span style="color:#94a3b8;font-size:.7rem">دریافتی</span>
       <span style="color:#34d399;font-weight:700">${formatMoney(totalPaidBySellers)}</span>
       <span class="formula-strip-sep">−</span>
-      <span style="color:#94a3b8;font-size:.7rem">پول خرید</span>
-      <span style="color:#f97316;font-weight:700">${formatMoney(allocPurchaseCost)}</span>
-      <span class="formula-strip-sep">−</span>
-      <span style="color:#94a3b8;font-size:.7rem">مصارف</span>
-      <span style="color:#fb923c;font-weight:700">${formatMoney(totalExpenses)}</span>
+      <span style="color:#94a3b8;font-size:.7rem">خرید + مصارف</span>
+      <span style="color:#f97316;font-weight:700">${formatMoney(allocPurchaseCost + totalExpenses)}</span>
       <span class="formula-strip-sep">=</span>
       <span style="color:#94a3b8;font-size:.7rem">سرمایه موجود</span>
       <span style="color:${availableCapital>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney(availableCapital)}</span>
@@ -288,103 +323,76 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang): Pr
 }
 
 // ============================================================
-// SELLER DASHBOARD - Full rebuild with bug fixes
+// SELLER DASHBOARD — simplified, default period = today
 // ============================================================
-async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, period: string): Promise<string> {
+async function sellerDashboard(
+  db: D1Database, user: SessionUser, lang: Lang, period: string
+): Promise<string> {
 
-  // ── Date filter for selected period ────────────────────────
-  let dateFilter = '';
-  if (period === 'today') dateFilter = `AND date(s.snapshot_time) = date('now')`;
-  else if (period === 'week')  dateFilter = `AND s.snapshot_time >= datetime('now','-7 days')`;
-  else if (period === 'month') dateFilter = `AND s.snapshot_time >= datetime('now','-30 days')`;
-  else if (period === 'year')  dateFilter = `AND s.snapshot_time >= datetime('now','-365 days')`;
+  const pf  = periodDateFilter(period);
+  const pfP = periodDateFilter(period, 'payment_date');
 
-  // ── Run all queries in parallel ──────────────────────────
   const [
     soldPeriod,
     soldAll,
-    paidRow,
+    paidAll,
     allocTotals,
     recentSales,
-    recentAllocs,
     recentPayments,
     allocRemaining,
-    monthlySales,
     chart7,
-    paymentsByType,
-    personalExpenses,
-    recentPersonalExp,
   ] = await Promise.all([
 
-    // 1. Sales in selected period
+    // 1. Sales in period
     db.prepare(`
       SELECT COALESCE(SUM(total_gb),0) as gb,
              COALESCE(SUM(gross_amount),0) as gross,
              COALESCE(SUM(commission_amount),0) as comm,
-             COALESCE(SUM(net_amount),0) as net,
              COUNT(*) as cnt
-      FROM sales s WHERE s.company_id=? AND s.seller_id=? ${dateFilter}`)
+      FROM sales s WHERE s.company_id=? AND s.seller_id=? ${pf}`)
       .bind(user.company_id, user.id).first<any>(),
 
-    // 2. All-time totals
+    // 2. All-time sales totals (for GB balance)
     db.prepare(`
       SELECT COALESCE(SUM(total_gb),0) as gb,
-             COALESCE(SUM(gross_amount),0) as gross,
-             COALESCE(SUM(commission_amount),0) as comm,
-             COUNT(*) as cnt
+             COALESCE(SUM(commission_amount),0) as comm
       FROM sales WHERE company_id=? AND seller_id=?`)
       .bind(user.company_id, user.id).first<any>(),
 
-    // 3. Total payments made by seller to owner (all-time)
+    // 3. All-time payments (for debt calc)
     db.prepare(`
       SELECT COALESCE(SUM(amount),0) as total, COUNT(*) as cnt
       FROM payments WHERE company_id=? AND seller_id=?`)
       .bind(user.company_id, user.id).first<any>(),
 
-    // 4. Allocation totals (all-time GB allocated)
+    // 4. Allocation totals (all-time)
     db.prepare(`
       SELECT COALESCE(SUM(total_gb),0) as gb,
-             COALESCE(SUM(total_gross),0) as gross,
-             COUNT(*) as batches
+             COALESCE(SUM(total_gross),0) as gross
       FROM allocation_batches WHERE company_id=? AND seller_id=?`)
       .bind(user.company_id, user.id).first<any>(),
 
-    // 5. Recent sales (last 20) with package + branch name
+    // 5. Recent sales (last 10)
     db.prepare(`
       SELECT s.id, s.snapshot_time, s.quantity, s.total_gb,
-             s.gross_amount, s.commission_amount, s.net_amount,
-             s.commission_rate, s.notes,
-             p.name as pkg_name, p.size_gb,
-             b.name as branch_name
+             s.gross_amount, s.commission_amount,
+             p.name as pkg_name, b.name as branch_name
       FROM sales s
-      JOIN packages p ON p.id = s.package_id
-      JOIN branches b ON b.id = s.branch_id
+      JOIN packages p ON p.id=s.package_id
+      JOIN branches b ON b.id=s.branch_id
       WHERE s.company_id=? AND s.seller_id=?
-      ORDER BY s.snapshot_time DESC LIMIT 20`)
+      ORDER BY s.snapshot_time DESC LIMIT 10`)
       .bind(user.company_id, user.id).all<any>(),
 
-    // 6. Recent allocations (last 10)
+    // 6. Recent payments (last 8)
     db.prepare(`
-      SELECT ab.id, ab.created_at, ab.total_gb, ab.total_gross,
-             ab.commission_rate, ab.notes,
-             br.name as branch_name
-      FROM allocation_batches ab
-      JOIN branches br ON br.id = ab.branch_id
-      WHERE ab.company_id=? AND ab.seller_id=?
-      ORDER BY ab.created_at DESC LIMIT 10`)
-      .bind(user.company_id, user.id).all<any>(),
-
-    // 7. Recent payments (last 10)
-    db.prepare(`
-      SELECT p.id, p.payment_date, p.type, p.amount, p.notes,
-             b.name as branch_name
+      SELECT p.id, p.payment_date, p.type, p.amount, p.notes
       FROM payments p
-      LEFT JOIN branches b ON b.id = p.branch_id
       WHERE p.company_id=? AND p.seller_id=?
-      ORDER BY p.payment_date DESC, p.created_at DESC LIMIT 10`)
+      ORDER BY p.payment_date DESC, p.created_at DESC LIMIT 8`)
       .bind(user.company_id, user.id).all<any>(),
 
-    // 8. Remaining inventory (allocated GB − sold GB)
+    // 7. Remaining GB
     db.prepare(`
       SELECT
         COALESCE((SELECT SUM(total_gb) FROM allocation_batches WHERE company_id=? AND seller_id=?),0)
@@ -392,484 +400,184 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
         as remaining_gb`)
       .bind(user.company_id, user.id, user.company_id, user.id).first<{remaining_gb:number}>(),
 
-    // 9. Monthly sales trend (last 6 months)
-    db.prepare(`
-      SELECT strftime('%Y-%m', snapshot_time) as month,
-             COALESCE(SUM(total_gb),0) as gb,
-             COALESCE(SUM(gross_amount),0) as gross,
-             COALESCE(SUM(commission_amount),0) as comm,
-             COUNT(*) as cnt
-      FROM sales WHERE company_id=? AND seller_id=?
-      GROUP BY month ORDER BY month DESC LIMIT 6`)
-      .bind(user.company_id, user.id).all<any>(),
-
-    // 10. Last 7 days chart data
+    // 8. Last 7 days chart
     db.prepare(`
       SELECT strftime('%Y-%m-%d', snapshot_time) as day,
              COALESCE(SUM(total_gb),0) as gb,
-             COALESCE(SUM(gross_amount),0) as gross,
-             COALESCE(SUM(commission_amount),0) as comm,
-             COUNT(*) as cnt
+             COALESCE(SUM(commission_amount),0) as comm
       FROM sales WHERE company_id=? AND seller_id=?
         AND snapshot_time >= datetime('now','-6 days','start of day')
       GROUP BY day ORDER BY day ASC`)
       .bind(user.company_id, user.id).all<any>(),
-
-    // 11. Payments breakdown by type
-    db.prepare(`
-      SELECT type, COALESCE(SUM(amount),0) as total, COUNT(*) as cnt
-      FROM payments WHERE company_id=? AND seller_id=?
-      GROUP BY type ORDER BY total DESC`)
-      .bind(user.company_id, user.id).all<any>(),
-
-    // 12. Seller personal expenses (seller_id = user.id, does NOT affect debt)
-    db.prepare(`
-      SELECT COALESCE(SUM(amount),0) as total, COUNT(*) as cnt
-      FROM expenses WHERE company_id=? AND seller_id=?`)
-      .bind(user.company_id, user.id).first<any>(),
-
-    // 13. Recent personal expenses (last 5)
-    db.prepare(`
-      SELECT category, title, amount, expense_date
-      FROM expenses WHERE company_id=? AND seller_id=?
-      ORDER BY expense_date DESC, created_at DESC LIMIT 5`)
-      .bind(user.company_id, user.id).all<any>(),
   ]);
 
-  // ── Derived values ────────────────────────────────────────
-  const allTimeComm  = soldAll?.comm  ?? 0;
-  const allTimeGb    = soldAll?.gb    ?? 0;
-  const totalPaid    = paidRow?.total ?? 0;
-  const allocValue   = allocTotals?.gross ?? 0; // total value of stock given to seller
-  // بدهی فروشنده = ارزش تخصیص − کمیسیون کسب‌شده − پرداخت‌های انجام‌شده توسط فروشنده
-  // debt > 0 means seller still owes owner; debt < 0 means owner overpaid
+  // ── Derived ──────────────────────────────────────────────
+  const allTimeComm  = soldAll?.comm ?? 0;
+  const totalPaid    = paidAll?.total ?? 0;
+  const allocValue   = allocTotals?.gross ?? 0;
   const debt         = allocValue - allTimeComm - totalPaid;
   const remainingGb  = Math.max(0, allocRemaining?.remaining_gb ?? 0);
-  // Personal expenses: tracking only, NOT part of debt calculation
-  const personalExpTotal = personalExpenses?.total ?? 0;
-  const personalExpCnt   = personalExpenses?.cnt   ?? 0;
+  const pl           = periodLabel(period);
 
-  // ── Chart: last 7 days ────────────────────────────────────
+  // ── Balance style ─────────────────────────────────────────
+  const balColor = debt > 0 ? 'var(--danger)' : debt < 0 ? 'var(--success)' : 'var(--text-muted)';
+  const balSign  = debt <= 0 ? '+' : '−';
+  const balLabel = debt > 0 ? '⚠️ بدهی به مالک' : debt < 0 ? '✅ مالک بدهکار شماست' : '✓ تسویه';
+
+  // ── Chart data ────────────────────────────────────────────
   const days7: string[] = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date(); d.setDate(d.getDate() - i);
     days7.push(d.toISOString().split('T')[0]);
   }
-  const chartMap = Object.fromEntries((chart7.results || []).map((r: any) => [r.day, r]));
-  const chartLabels = JSON.stringify(days7.map(d =>
-    new Date(d).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' })));
-  const chartGb   = JSON.stringify(days7.map(d => Math.round((chartMap[d]?.gb   ?? 0) * 100) / 100));
-  const chartGross = JSON.stringify(days7.map(d => Math.round(chartMap[d]?.gross ?? 0)));
-  const chartComm  = JSON.stringify(days7.map(d => Math.round(chartMap[d]?.comm  ?? 0)));
-  const chartCnt   = JSON.stringify(days7.map(d => chartMap[d]?.cnt ?? 0));
-
-  // ── Period label ──────────────────────────────────────────
-  const periodLabel = period === 'today' ? 'امروز'
-    : period === 'week'  ? 'این هفته'
-    : period === 'month' ? 'این ماه'
-    : period === 'year'  ? 'امسال'
-    : 'همه وقت';
-
-  // ── Period selector buttons ───────────────────────────────
-  const periodBtns = ['today','week','month','year','all'].map(p => `
-    <a href="/dashboard?period=${p}"
-       class="btn btn-sm ${period === p ? 'btn-primary' : 'btn-outline'}"
-       style="white-space:nowrap">${
-         p === 'today' ? '📅 امروز'
-       : p === 'week'  ? '📅 این هفته'
-       : p === 'month' ? '📅 این ماه'
-       : p === 'year'  ? '📅 امسال'
-       :                 '📅 همه وقت'
-    }</a>`).join('');
-
-  // ── Helper: format date ───────────────────────────────────
-  function fdate(d: string) {
-    return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-  }
-  function ftime(d: string) {
-    return new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  }
+  const cmap        = Object.fromEntries((chart7.results||[]).map((r:any)=>[r.day,r]));
+  const chartLabels = JSON.stringify(days7.map(d=>new Date(d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric'})));
+  const chartGb     = JSON.stringify(days7.map(d=>Math.round((cmap[d]?.gb??0)*100)/100));
+  const chartComm   = JSON.stringify(days7.map(d=>Math.round(cmap[d]?.comm??0)));
 
   // ── Sale rows ─────────────────────────────────────────────
-  const saleRows = (recentSales.results || []).map((s: any, i: number) => `
+  const saleRows = (recentSales.results||[]).map((s:any)=>`
     <tr>
+      <td style="font-size:.82rem">${fdate(s.snapshot_time)}</td>
+      <td style="font-size:.82rem">${s.branch_name}</td>
+      <td><strong style="font-size:.82rem">${s.pkg_name}</strong></td>
+      <td class="text-center">${s.quantity}</td>
+      <td class="text-primary">${formatGB(s.total_gb)}</td>
+      <td class="text-warning">${formatMoney(s.commission_amount)}</td>
       <td>
-        <div class="font-bold" style="font-size:.85rem">${fdate(s.snapshot_time)}</div>
-        <div style="font-size:.7rem;color:var(--text-muted)">${ftime(s.snapshot_time)}</div>
+        <a href="/sales/${s.id}/edit" class="btn btn-outline btn-sm">✏️</a>
       </td>
-      <td>
-        <span style="font-size:.82rem">${s.branch_name}</span>
-      </td>
-      <td>
-        <div class="font-bold" style="font-size:.82rem">${s.pkg_name}</div>
-        <span class="badge badge-primary" style="font-size:.68rem">${s.size_gb} GB</span>
-      </td>
-      <td class="text-center font-bold">${s.quantity}</td>
-      <td class="text-primary font-bold">${formatGB(s.total_gb)}</td>
-      <td style="color:#0891b2">${formatMoney(s.gross_amount)}</td>
-      <td class="text-warning font-bold">${formatMoney(s.commission_amount)}</td>
-      <td style="font-size:.75rem;color:var(--text-muted)">${Math.round(s.commission_rate * 100)}%</td>
-      <td style="font-size:.78rem;color:var(--text-muted)">${s.notes || '—'}</td>
-    </tr>`).join('');
-
-  // ── Allocation rows ───────────────────────────────────────
-  const allocRows = (recentAllocs.results || []).map((a: any) => `
-    <tr>
-      <td>
-        <div style="font-size:.82rem">${fdate(a.created_at)}</div>
-        <div style="font-size:.7rem;color:var(--text-muted)">${ftime(a.created_at)}</div>
-      </td>
-      <td><span style="font-size:.82rem">${a.branch_name}</span></td>
-      <td class="text-primary font-bold">${formatGB(a.total_gb)}</td>
-      <td style="color:#0891b2">${formatMoney(a.total_gross)}</td>
-      <td><span class="badge badge-info" style="font-size:.7rem">${Math.round(a.commission_rate * 100)}%</span></td>
-      <td style="font-size:.78rem;color:var(--text-muted)">${a.notes || '—'}</td>
     </tr>`).join('');
 
   // ── Payment rows ──────────────────────────────────────────
-  const paymentRows = (recentPayments.results || []).map((p: any) => `
+  const payRows = (recentPayments.results||[]).map((p:any)=>`
     <tr>
-      <td><div style="font-size:.82rem">${fdate(p.payment_date)}</div></td>
-      <td>
-        <span class="badge ${
-          p.type === 'commission'  ? 'badge-success' :
-          p.type === 'advance'     ? 'badge-warning' :
-          p.type === 'settlement'  ? 'badge-info'    : 'badge-primary'
-        }" style="font-size:.72rem">${
-          p.type === 'commission' ? t(lang,'commission_pay') :
-          p.type === 'advance'    ? t(lang,'advance') :
-          p.type === 'settlement' ? t(lang,'settlement') : p.type
-        }</span>
-      </td>
-      <td style="font-size:.82rem">${p.branch_name || '—'}</td>
-      <td class="font-bold" style="color:var(--danger)">−${formatMoney(p.amount)}</td>
-      <td style="font-size:.78rem;color:var(--text-muted)">${p.notes || '—'}</td>
+      <td style="font-size:.82rem">${fdate(p.payment_date)}</td>
+      <td><span class="badge ${
+        p.type==='commission'?'badge-success':p.type==='advance'?'badge-warning':'badge-info'
+      }" style="font-size:.7rem">${p.type}</span></td>
+      <td class="text-danger">−${formatMoney(p.amount)}</td>
+      <td style="font-size:.78rem;color:var(--text-muted)">${p.notes||'—'}</td>
     </tr>`).join('');
-
-  // ── Personal expenses rows ────────────────────────────────
-  const personalExpRows = (recentPersonalExp.results || []).map((e: any) => `
-    <tr>
-      <td style="font-size:.82rem">${fdate(e.expense_date)}</td>
-      <td>
-        <span class="badge" style="background:#f43f5e22;color:#f43f5e;border:1px solid #f43f5e44;font-size:.72rem">
-          ${e.category === 'rent' ? '🏠 ' + t(lang,'cat_rent') :
-            e.category === 'salary' ? '👤 ' + t(lang,'cat_salary') :
-            e.category === 'utilities' ? '💡 ' + t(lang,'cat_utilities') :
-            e.category === 'maintenance' ? '🔧 ' + t(lang,'cat_maintenance') :
-            e.category === 'transport' ? '🚗 ' + t(lang,'cat_transport') :
-            e.category === 'general' ? '📋 ' + t(lang,'cat_general') : '➕ ' + t(lang,'cat_other')}
-        </span>
-      </td>
-      <td style="font-size:.82rem">${e.title}</td>
-      <td class="font-bold" style="color:#f43f5e">−${formatMoney(e.amount)}</td>
-    </tr>`).join('');
-
-  // ── Monthly trend rows ────────────────────────────────────
-  const monthlyRows = (monthlySales.results || []).map((m: any) => `
-    <tr>
-      <td class="font-bold">${m.month}</td>
-      <td class="text-primary">${formatGB(m.gb)}</td>
-      <td style="color:#0891b2">${formatMoney(m.gross)}</td>
-      <td class="text-warning">${formatMoney(m.comm)}</td>
-      <td style="font-size:.8rem;color:var(--text-muted);text-align:center">${m.cnt}</td>
-    </tr>`).join('');
-
-  // ── Balance card style (debt > 0 = seller owes owner; debt < 0 = owner owes seller) ──────
-  const balance = debt; // alias for template
-  // debt > 0 → seller still owes money to owner (shown in red as debt)
-  // debt < 0 → owner owes money to seller (shown in green as receivable)
-  const balanceColor  = debt > 0  ? 'var(--danger)'  : debt < 0 ? 'var(--success)' : 'var(--text-muted)';
-  const balanceBg     = debt > 0  ? 'linear-gradient(135deg,#fee2e2,var(--bg-secondary))'
-                      : debt < 0  ? 'linear-gradient(135deg,#dcfce7,var(--bg-secondary))'
-                      : '';
-  const balanceLabel  = debt > 0  ? '⚠️ بدهی به مالک'
-                      : debt < 0  ? '✅ مالک بدهکار شماست'
-                      : '✓ تسویه';
-  const balanceSign   = debt > 0 ? '−' : '+';
 
   return `
   <!-- Page Header -->
   <div class="page-header">
     <div>
       <div class="page-title">👋 ${user.full_name}</div>
-      <div class="page-subtitle">داشبورد فروشنده · ${periodLabel}</div>
+      <div class="page-subtitle">داشبورد فروشنده · ${pl}</div>
     </div>
-    <a href="/sales/add" class="btn btn-primary">
-      <span style="font-size:1.1rem">+</span> ثبت فروش
-    </a>
+    <a href="/sales/add" class="btn btn-primary">+ ثبت فروش</a>
   </div>
 
   <!-- Period Filter -->
   <div style="margin-bottom:1.25rem;display:flex;gap:.4rem;flex-wrap:wrap">
-    ${periodBtns}
+    ${periodBtns(period)}
   </div>
 
-  <!-- ══════════════════════════════════════════
-       ROW 1 – KPI CARDS (6 cards)
-  ══════════════════════════════════════════ -->
+  <!-- 4 KPI Cards -->
   <div class="stats-grid" style="margin-bottom:1.25rem">
 
-    <!-- GB Remaining (available to sell) -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#7c3aed"></div>
-      <div class="stat-label">📦 ${t(lang,'available_gb')}</div>
+      <div class="stat-label">📦 موجودی قابل فروش</div>
       <div class="stat-value" style="color:#7c3aed">${formatGB(remainingGb)}</div>
-      <div class="stat-sub">${t(lang,'total_allocated')} − ${t(lang,'total_sold')}</div>
+      <div class="stat-sub">از ${formatGB(allocTotals?.gb??0)} تخصیص</div>
     </div>
 
-    <!-- GB Sold in period -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--success)"></div>
-      <div class="stat-label">📤 ${t(lang,'sold_gb')}</div>
-      <div class="stat-value success">${formatGB(soldPeriod?.gb ?? 0)}</div>
-      <div class="stat-sub">${soldPeriod?.cnt ?? 0} ${t(lang,'transactions')} · ${periodLabel}</div>
+      <div class="stat-label">📤 فروش · ${pl}</div>
+      <div class="stat-value success">${formatGB(soldPeriod?.gb??0)}</div>
+      <div class="stat-sub">${soldPeriod?.cnt??0} معامله · ${formatMoney(soldPeriod?.gross??0)}</div>
     </div>
 
-    <!-- Gross Revenue in period -->
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:#0891b2"></div>
-      <div class="stat-label">💵 ${t(lang,'gross_income')}</div>
-      <div class="stat-value" style="color:#0891b2">${formatMoney(soldPeriod?.gross ?? 0)}</div>
-      <div class="stat-sub">${periodLabel}</div>
-    </div>
-
-    <!-- Commission in period -->
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--warning)"></div>
-      <div class="stat-label">🏷 ${t(lang,'commission_earned_lbl')}</div>
-      <div class="stat-value warning">${formatMoney(soldPeriod?.comm ?? 0)}</div>
-      <div class="stat-sub">${t(lang,'total')}: ${formatMoney(allTimeComm)}</div>
+      <div class="stat-label">🏷 کمیسیون · ${pl}</div>
+      <div class="stat-value warning">${formatMoney(soldPeriod?.comm??0)}</div>
+      <div class="stat-sub">کل کمیسیون: ${formatMoney(allTimeComm)}</div>
     </div>
 
-    <!-- Total Paid by Seller to Owner -->
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:var(--primary)"></div>
-      <div class="stat-label">💳 ${t(lang,'seller_paid_to_owner')}</div>
-      <div class="stat-value primary">${formatMoney(totalPaid)}</div>
-      <div class="stat-sub">${paidRow?.cnt ?? 0} ${t(lang,'payments_count')}</div>
+    <div class="stat-card" style="${debt>0?'background:linear-gradient(135deg,#fee2e2,var(--bg-secondary))':debt<0?'background:linear-gradient(135deg,#dcfce7,var(--bg-secondary))':''}">
+      <div class="stat-card-accent" style="background:${balColor}"></div>
+      <div class="stat-label">⚖️ بدهی / اعتبار</div>
+      <div class="stat-value" style="color:${balColor}">${balSign}${formatMoney(Math.abs(debt))}</div>
+      <div class="stat-sub">${balLabel}</div>
     </div>
 
-    <!-- Debt/Balance card -->
-    <div class="stat-card" style="${balanceBg ? `background:${balanceBg}` : ''}">
-      <div class="stat-card-accent" style="background:${balanceColor}"></div>
-      <div class="stat-label">⚖️ ${t(lang,'debt_balance')}</div>
-      <div class="stat-value" style="color:${balanceColor}">${balanceSign}${formatMoney(Math.abs(debt))}</div>
-      <div class="stat-sub">${balanceLabel}</div>
-    </div>
-
-    <!-- Personal Expenses card (tracking only, NOT affecting debt) -->
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:#f43f5e"></div>
-      <div class="stat-label">💸 ${t(lang,'personal_expenses')}</div>
-      <div class="stat-value" style="color:#f43f5e">${formatMoney(personalExpTotal)}</div>
-      <div class="stat-sub">${personalExpCnt} ${t(lang,'expense_type')} · <a href="/expenses" style="color:var(--primary)">${t(lang,'view_all')}</a></div>
-    </div>
   </div>
 
-  <!-- ══════════════════════════════════════════
-       ROW 2 – CHART + MONTHLY TREND
-  ══════════════════════════════════════════ -->
-  <div class="grid-chart-trend">
+  <!-- Chart 7 days + Recent Payments (two-column) -->
+  <div class="grid-chart-trend" style="margin-bottom:1rem">
 
-    <!-- Chart: Last 7 days -->
+    <!-- Chart -->
     <div class="card">
       <div class="card-header">
-        <div class="card-title">📈 فروش‌های من — ۷ روز اخیر</div>
-        <div style="display:flex;gap:1rem;font-size:.72rem;color:var(--text-muted)">
-          <span style="color:var(--primary)">● ${t(lang,'sold_gb')}</span>
-          <span style="color:var(--warning)">● ${t(lang,'commission_amount')}</span>
-          <span style="color:#0891b2">● ${t(lang,'total')}</span>
+        <div class="card-title">📈 فروش ۷ روز اخیر</div>
+        <div style="font-size:.72rem;color:var(--text-muted)">
+          <span style="color:var(--primary)">● GB</span>
+          <span style="color:var(--warning);margin-right:.75rem">● کمیسیون</span>
         </div>
       </div>
       <div style="padding:.75rem 1rem 1rem">
-        <canvas id="sellerChart" height="140"></canvas>
+        <canvas id="sellerChart" height="145"></canvas>
       </div>
     </div>
 
-    <!-- Monthly Trend -->
+    <!-- Recent Payments -->
     <div class="card">
       <div class="card-header">
-        <div class="card-title">📅 روند ماهانه</div>
-        <span style="font-size:.72rem;color:var(--text-muted)">۶ ماه اخیر</span>
+        <div class="card-title">💳 پرداختی‌های اخیر</div>
+        <a href="/payments" class="btn btn-outline btn-sm">همه →</a>
       </div>
-      ${(monthlySales.results || []).length ? `
+      ${(recentPayments.results||[]).length ? `
       <div class="table-wrapper">
         <table>
-          <thead>
-            <tr>
-              <th>ماه</th>
-              <th>GB</th>
-              <th>ناخالص</th>
-              <th>کمیسیون</th>
-              <th style="text-align:center">معاملات</th>
-            </tr>
-          </thead>
-          <tbody>${monthlyRows}</tbody>
+          <thead><tr><th>تاریخ</th><th>نوع</th><th>مبلغ</th><th>یادداشت</th></tr></thead>
+          <tbody>${payRows}</tbody>
         </table>
+      </div>
+      <div style="padding:.5rem 1rem;font-size:.78rem;color:var(--text-muted);border-top:1px solid var(--border)">
+        جمع پرداختی: <strong style="color:var(--success)">${formatMoney(totalPaid)}</strong>
       </div>` : `
       <div class="empty-state" style="padding:2rem">
-        <div class="empty-state-icon">📅</div>
-        <h3>هنوز داده‌ای نیست</h3>
+        <div class="empty-state-icon">💳</div>
+        <p style="font-size:.82rem">هنوز پرداختی ثبت نشده</p>
+        <a href="/payments" class="btn btn-primary btn-sm" style="margin-top:.75rem">+ ثبت پرداختی</a>
       </div>`}
     </div>
+
   </div>
 
-  <!-- ROW 3 – RECENT SALES TABLE (full width) -->
+  <!-- Recent Sales -->
   <div class="card" style="margin-bottom:1rem">
     <div class="card-header">
       <div class="card-title">💰 فروش‌های اخیر
-        <span class="badge badge-primary" style="margin-left:.5rem;font-size:.72rem">${(recentSales.results||[]).length}</span>
+        <span class="badge badge-primary" style="margin-right:.4rem;font-size:.7rem">${(recentSales.results||[]).length}</span>
       </div>
       <a href="/sales" class="btn btn-outline btn-sm">همه فروش‌ها →</a>
     </div>
-    ${(recentSales.results || []).length ? `
+    ${(recentSales.results||[]).length ? `
     <div class="table-wrapper">
       <table>
-        <thead>
-          <tr>
-            <th>تاریخ / وقت</th>
-            <th>شعبه</th>
-            <th>پکیج</th>
-            <th style="text-align:center">تعداد</th>
-            <th>GB</th>
-            <th>درآمد کل</th>
-            <th>کمیشن</th>
-            <th>نرخ</th>
-            <th>یادداشت</th>
-          </tr>
-        </thead>
+        <thead><tr>
+          <th>تاریخ</th><th>شعبه</th><th>پکیج</th>
+          <th style="text-align:center">تعداد</th><th>GB</th><th>کمیشن</th><th></th>
+        </tr></thead>
         <tbody>${saleRows}</tbody>
       </table>
-    </div>
-    <div style="padding:.75rem 1rem;border-top:1px solid var(--border);display:flex;gap:2rem;font-size:.82rem;flex-wrap:wrap">
-      <span>${t(lang,'total_sold')}: <strong class="text-primary">${formatGB(allTimeGb)}</strong></span>
-      <span>${t(lang,'gross_income')}: <strong style="color:#0891b2">${formatMoney(soldPeriod?.gross??0)}</strong></span>
-      <span>${t(lang,'commission_amount')}: <strong class="text-warning">${formatMoney(soldPeriod?.comm??0)}</strong></span>
     </div>` : `
-    <div class="empty-state" style="padding:2.5rem">
+    <div class="empty-state" style="padding:2rem">
       <div class="empty-state-icon">💰</div>
-      <h3>هنوز فروشی ثبت نشده</h3>
-      <p>فروش‌های خود را ثبت کنید.</p>
-      <a href="/sales/add" class="btn btn-primary">+ ثبت اولین فروش</a>
+      <p>هنوز فروشی ثبت نشده</p>
+      <a href="/sales/add" class="btn btn-primary" style="margin-top:.75rem">+ ثبت اولین فروش</a>
     </div>`}
   </div>
 
-  <!-- ══════════════════════════════════════════
-       ROW 4 – ALLOCATIONS + PAYMENTS
-  ══════════════════════════════════════════ -->
-  <div class="grid-2col">
-
-    <!-- Allocations -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">🔀 تخصیص‌های من
-          <span class="badge badge-info" style="margin-left:.5rem;font-size:.72rem">${allocTotals?.batches ?? 0}</span>
-        </div>
-        <a href="/allocations" class="btn btn-outline btn-sm">همه →</a>
-      </div>
-      <div style="padding:.5rem 1rem;background:var(--bg-tertiary,var(--bg-secondary));display:flex;gap:2rem;font-size:.82rem;border-bottom:1px solid var(--border)">
-        <span>کل تخصیص: <strong class="text-primary">${formatGB(allocTotals?.gb ?? 0)}</strong></span>
-        <span>باقی‌مانده: <strong style="color:#7c3aed">${formatGB(remainingGb)}</strong></span>
-      </div>
-      ${(recentAllocs.results || []).length ? `
-      <div class="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>تاریخ</th>
-              <th>شعبه</th>
-              <th>گیگابایت</th>
-              <th>ارزش</th>
-              <th>نرخ</th>
-              <th>یادداشت</th>
-            </tr>
-          </thead>
-          <tbody>${allocRows}</tbody>
-        </table>
-      </div>` : `
-      <div class="empty-state" style="padding:1.5rem">
-        <div class="empty-state-icon">🔀</div>
-        <h3>هنوز تخصیصی ثبت نشده</h3>
-      </div>`}
-    </div>
-
-    <!-- Payments -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">💳 پرداختی‌های من به مالک
-          <span class="badge badge-success" style="margin-left:.5rem;font-size:.72rem">${paidRow?.cnt ?? 0}</span>
-        </div>
-        <a href="/payments" class="btn btn-outline btn-sm">همه →</a>
-      </div>
-      <div style="padding:.5rem 1rem;background:var(--bg-tertiary,var(--bg-secondary));display:flex;gap:2rem;font-size:.82rem;border-bottom:1px solid var(--border)">
-        <span>ارزش تخصیص: <strong style="color:#0891b2">${formatMoney(allocValue)}</strong></span>
-        <span>کمیشن: <strong class="text-warning">${formatMoney(allTimeComm)}</strong></span>
-        <span>پرداختی: <strong class="text-success">${formatMoney(totalPaid)}</strong></span>
-        <span>بدهی: <strong style="color:${balanceColor}">${balanceSign}${formatMoney(Math.abs(debt))}</strong></span>
-      </div>
-      ${(recentPayments.results || []).length ? `
-      <div class="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>تاریخ</th>
-              <th>نوع</th>
-              <th>شعبه</th>
-              <th>مبلغ</th>
-              <th>یادداشت</th>
-            </tr>
-          </thead>
-          <tbody>${paymentRows}</tbody>
-        </table>
-      </div>` : `
-      <div class="empty-state" style="padding:1.5rem">
-        <div class="empty-state-icon">💳</div>
-        <h3>هنوز پرداختی ثبت نشده</h3>
-        <p style="font-size:.82rem;color:var(--text-muted)">پرداختی‌های شما به مالک اینجا نمایش داده می‌شود</p>
-      </div>`}
-    </div>
-  </div>
-
-  <!-- ══════════════════════════════════════════
-       ROW 4.5 – PERSONAL EXPENSES (tracking only)
-  ══════════════════════════════════════════ -->
-  <div class="card" style="margin-bottom:1rem">
-    <div class="card-header">
-      <div class="card-title">💸 مصارف شخصی
-        <span class="badge" style="background:#f43f5e22;color:#f43f5e;border:1px solid #f43f5e44;margin-right:.4rem;font-size:.72rem">${personalExpCnt}</span>
-      </div>
-      <a href="/expenses" class="btn btn-outline btn-sm">همه →</a>
-    </div>
-    <div style="padding:.5rem 1rem;background:linear-gradient(135deg,#fff1f2,var(--bg-secondary));border-bottom:1px solid var(--border);font-size:.78rem;color:#9f1239">
-      ℹ️ این مصارف <strong>صرفاً برای کنترل شخصی</strong> شما ثبت شده و در محاسبه بدهی یا پرداختی به مالک تأثیر ندارد.
-      مجموع: <strong style="color:#f43f5e">${formatMoney(personalExpTotal)}</strong>
-    </div>
-    ${(recentPersonalExp.results || []).length ? `
-    <div class="table-wrapper">
-      <table>
-        <thead>
-          <tr>
-            <th>تاریخ</th>
-            <th>دسته‌بندی</th>
-            <th>عنوان</th>
-            <th>مبلغ</th>
-          </tr>
-        </thead>
-        <tbody>${personalExpRows}</tbody>
-      </table>
-    </div>` : `
-    <div class="empty-state" style="padding:1.5rem">
-      <div class="empty-state-icon">💸</div>
-      <h3>هنوز مصرف شخصی ثبت نشده</h3>
-      <p style="font-size:.82rem;color:var(--text-muted)"><a href="/expenses">+ ثبت اولین مصرف</a></p>
-    </div>`}
-  </div>
-
-  <!-- ══════════════════════════════════════════
-       ROW 5 – ALL-TIME SUMMARY BANNER
-  ══════════════════════════════════════════ -->
+  <!-- Formula Banner (bottom) -->
   <div class="formula-banner">
-    <div style="color:#a5b4fc;font-size:.75rem;font-weight:600;margin-bottom:.6rem;letter-spacing:.05em">📊 خلاصه کل عملکرد</div>
+    <div style="color:#a5b4fc;font-size:.72rem;font-weight:600;margin-bottom:.5rem">📊 خلاصه کل</div>
     <div class="formula-banner-inner">
       <div class="formula-item">
         <div class="formula-label">ارزش تخصیص</div>
@@ -887,159 +595,68 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
       </div>
       <span class="formula-sep">=</span>
       <div class="formula-item">
-        <div class="formula-label">${debt > 0 ? 'بدهی به مالک' : 'مالک بدهکار'}</div>
-        <div class="formula-value" style="color:${balanceColor};font-size:1.1rem">${balanceSign}${formatMoney(Math.abs(debt))}</div>
+        <div class="formula-label">${debt>0?'بدهی به مالک':'مالک بدهکار'}</div>
+        <div class="formula-value" style="color:${balColor};font-size:1.05rem">${balSign}${formatMoney(Math.abs(debt))}</div>
       </div>
       <div class="formula-divider"></div>
       <div class="formula-item">
-        <div class="formula-label">کل تخصیص شده</div>
-        <div class="formula-value" style="color:#818cf8">${formatGB(allocTotals?.gb ?? 0)}</div>
+        <div class="formula-label">تخصیص شده</div>
+        <div class="formula-value" style="color:#818cf8">${formatGB(allocTotals?.gb??0)}</div>
       </div>
       <span class="formula-sep">→</span>
       <div class="formula-item">
-        <div class="formula-label">فروخته</div>
-        <div class="formula-value" style="color:#4ade80">${formatGB(allTimeGb)}</div>
-      </div>
-      <span class="formula-sep">→</span>
-      <div class="formula-item">
-        <div class="formula-label">باقی</div>
-        <div class="formula-value" style="color:#e2e8f0">${formatGB(remainingGb)}</div>
+        <div class="formula-label">باقی‌مانده</div>
+        <div class="formula-value" style="color:#4ade80">${formatGB(remainingGb)}</div>
       </div>
     </div>
   </div>
 
-  <!-- ROW 6 – FINANCIAL SUMMARY -->
-  <div class="card" style="margin-bottom:1rem">
-    <div class="card-header">
-      <div class="card-title">💸 ${t(lang,'financial_summary')}</div>
-      <span style="font-size:.75rem;color:var(--text-muted)">${t(lang,'payment_history')}</span>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;padding:1rem">
-
-      <!-- Commission Earned -->
-      <div style="background:linear-gradient(135deg,#fef9c3,var(--bg-secondary));border-radius:10px;padding:1rem;border:1px solid #fde68a">
-        <div style="font-size:.72rem;color:#92400e;font-weight:600;margin-bottom:.4rem">🏷️ ${t(lang,'commission_earned_lbl')}</div>
-        <div style="font-size:1.4rem;font-weight:700;color:#b45309">${formatMoney(allTimeComm)}</div>
-        <div style="font-size:.72rem;color:#92400e;margin-top:.25rem">${soldAll?.cnt ?? 0} ${t(lang,'sales_count')}</div>
-      </div>
-
-      <!-- Total Paid by Seller -->
-      <div style="background:linear-gradient(135deg,#dcfce7,var(--bg-secondary));border-radius:10px;padding:1rem;border:1px solid #86efac">
-        <div style="font-size:.72rem;color:#14532d;font-weight:600;margin-bottom:.4rem">💳 ${t(lang,'seller_paid_to_owner')}</div>
-        <div style="font-size:1.4rem;font-weight:700;color:#15803d">${formatMoney(totalPaid)}</div>
-        <div style="font-size:.72rem;color:#14532d;margin-top:.25rem">${paidRow?.cnt ?? 0} ${t(lang,'payments_count')}</div>
-      </div>
-
-      <!-- Debt/Balance Due -->
-      <div style="background:${debt > 0 ? 'linear-gradient(135deg,#fee2e2,var(--bg-secondary))' : debt < 0 ? 'linear-gradient(135deg,#dcfce7,var(--bg-secondary))' : 'var(--bg-secondary)'};border-radius:10px;padding:1rem;border:1px solid ${debt > 0 ? '#fca5a5' : debt < 0 ? '#86efac' : 'var(--border)'}">
-        <div style="font-size:.72rem;color:${debt > 0 ? '#991b1b' : debt < 0 ? '#14532d' : 'var(--text-muted)'};font-weight:600;margin-bottom:.4rem">⚖️ ${t(lang,'debt_balance')}</div>
-        <div style="font-size:1.4rem;font-weight:700;color:${balanceColor}">${balanceSign}${formatMoney(Math.abs(debt))}</div>
-        <div style="font-size:.72rem;color:${balanceColor};margin-top:.25rem">${debt > 0 ? t(lang,'debt_to_owner') : debt < 0 ? t(lang,'owner_owes_you') : t(lang,'settled')}</div>
-      </div>
-    </div>
-
-    ${(paymentsByType?.results || []).length ? `
-    <!-- Payment Breakdown by Type -->
-    <div style="padding:0 1rem 1rem">
-      <div style="font-size:.78rem;font-weight:600;color:var(--text-muted);margin-bottom:.5rem">${t(lang,'payments_by_type')}</div>
-      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-        ${(paymentsByType?.results || []).map((p: any) => `
-          <div style="background:var(--bg-tertiary,var(--bg-secondary));border-radius:8px;padding:.5rem .875rem;border:1px solid var(--border)">
-            <span class="badge ${
-              p.type === 'commission'  ? 'badge-success' :
-              p.type === 'advance'     ? 'badge-warning' :
-              p.type === 'settlement'  ? 'badge-info'    : 'badge-primary'
-            }" style="font-size:.7rem;text-transform:capitalize">${p.type}</span>
-            <span style="margin-left:.5rem;font-weight:600;color:var(--text-primary);font-size:.85rem">${formatMoney(p.total)}</span>
-            <span style="font-size:.72rem;color:var(--text-muted)"> × ${p.cnt}</span>
-          </div>`).join('')}
-      </div>
-    </div>` : ''}
-  </div>
-
-  <!-- Chart.js Script -->
+  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script>
-  (function() {
+  (function(){
     const ctx = document.getElementById('sellerChart');
-    if (!ctx) return;
-    new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: ${chartLabels},
-        datasets: [
+    if(!ctx) return;
+    new Chart(ctx,{
+      type:'bar',
+      data:{
+        labels:${chartLabels},
+        datasets:[
           {
-            label: 'GB Sold',
-            data: ${chartGb},
-            backgroundColor: 'rgba(99,102,241,.6)',
-            borderColor: 'var(--primary)',
-            borderWidth: 1.5,
-            borderRadius: 4,
-            yAxisID: 'y'
+            label:'GB فروخته',
+            data:${chartGb},
+            backgroundColor:'rgba(99,102,241,.55)',
+            borderColor:'var(--primary)',
+            borderWidth:1.5,
+            borderRadius:4,
+            yAxisID:'y'
           },
           {
-            label: 'Commission ؋',
-            data: ${chartComm},
-            type: 'line',
-            borderColor: 'var(--warning)',
-            backgroundColor: 'transparent',
-            borderWidth: 2,
-            pointRadius: 4,
-            pointBackgroundColor: 'var(--warning)',
-            tension: 0.4,
-            yAxisID: 'y2'
-          },
-          {
-            label: 'Gross ؋',
-            data: ${chartGross},
-            type: 'line',
-            borderColor: '#0891b2',
-            backgroundColor: 'transparent',
-            borderWidth: 1.5,
-            pointRadius: 3,
-            tension: 0.4,
-            borderDash: [4,3],
-            yAxisID: 'y2'
+            label:'کمیسیون ؋',
+            data:${chartComm},
+            type:'line',
+            borderColor:'var(--warning)',
+            backgroundColor:'transparent',
+            borderWidth:2,
+            pointRadius:3,
+            tension:.4,
+            yAxisID:'y2'
           }
         ]
       },
-      options: {
-        responsive: true,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: function(ctx) {
-                if (ctx.dataset.yAxisID === 'y') return ' ' + ctx.parsed.y.toFixed(1) + ' GB';
-                return ' ؋' + Math.round(ctx.parsed.y).toLocaleString();
-              }
-            }
-          }
+      options:{
+        responsive:true,
+        interaction:{mode:'index',intersect:false},
+        plugins:{
+          legend:{display:false},
+          tooltip:{callbacks:{
+            label:c=>c.dataset.yAxisID==='y'?' '+c.parsed.y.toFixed(1)+' GB':' ؋'+Math.round(c.parsed.y).toLocaleString()
+          }}
         },
-        scales: {
-          x: {
-            grid: { color: 'rgba(148,163,184,.1)' },
-            ticks: { color: 'var(--text-muted)', font: { size: 10 } }
-          },
-          y: {
-            position: 'left',
-            grid: { color: 'rgba(148,163,184,.1)' },
-            ticks: {
-              color: 'var(--primary)',
-              font: { size: 10 },
-              callback: v => v + ' GB'
-            }
-          },
-          y2: {
-            position: 'right',
-            grid: { drawOnChartArea: false },
-            ticks: {
-              color: 'var(--warning)',
-              font: { size: 10 },
-              callback: v => '؋' + Math.round(v).toLocaleString()
-            }
-          }
+        scales:{
+          x:{grid:{color:'rgba(148,163,184,.08)'},ticks:{color:'var(--text-muted)',font:{size:10}}},
+          y:{position:'left',grid:{color:'rgba(148,163,184,.08)'},ticks:{color:'var(--primary)',font:{size:10},callback:v=>v+' GB'}},
+          y2:{position:'right',grid:{drawOnChartArea:false},ticks:{color:'var(--warning)',font:{size:10},callback:v=>'؋'+Math.round(v).toLocaleString()}}
         }
       }
     });
@@ -1047,284 +664,213 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
   </script>`;
 }
 
-
 // ============================================================
-// FINANCIAL INVESTOR DASHBOARD
-// Mode: financial — shows allocations, payments, balances + commission + purchase cost
-// This mode is for owners who do NOT sell themselves; sellers do all selling.
-// Formula:
-//   ناخالص (Gross)        = total_gross from allocation_batches
-//   کمیسیون (Commission)  = total_commission (auto-deducted for sellers)
-//   پول خرید (Purchase)   = total_gb × purchase_price_per_gb (from company settings)
-//   سود خالص مالک         = Gross − Commission − Purchase Cost
-//   دریافتی (Paid)        = payments received from sellers
-//   باقی‌مانده            = Net (seller owes) − Paid
-//   سرمایه موجود         = Paid − مصارف شرکت
+// INVESTOR / FINANCIAL DASHBOARD — simplified, period-aware
 // ============================================================
-async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang): Promise<string> {
+async function investorDashboard(
+  db: D1Database, user: SessionUser, lang: Lang, period: string
+): Promise<string> {
 
-  // ── Company settings (purchase price per GB) ─────────────
+  const pfA = periodDateFilter(period, 'ab.created_at');
+  const pfP = periodDateFilter(period, 'payment_date');
+
   const company = await db.prepare('SELECT name, settings FROM companies WHERE id=?')
     .bind(user.company_id).first<any>();
   const settings = JSON.parse(company?.settings || '{}');
   const purchasePricePerGb: number = settings.purchase_price_per_gb ?? 0;
 
-  // ── Company-wide totals from allocation_batches (source of truth) ─────
-  const allocTotals = await db.prepare(`
-    SELECT
-      COALESCE(SUM(total_gb),0)         as total_gb,
-      COALESCE(SUM(total_gross),0)      as total_gross,
-      COALESCE(SUM(total_commission),0) as total_commission,
-      COALESCE(SUM(total_net),0)        as total_net
-    FROM allocation_batches WHERE company_id=?
-  `).bind(user.company_id).first<any>();
+  const [allocPeriod, payPeriod, expRow, sellerStats, chart7Pay, monthly6, monthly6Pay] = await Promise.all([
 
-  const totalGb         = allocTotals?.total_gb         ?? 0;
-  const totalGross      = allocTotals?.total_gross       ?? 0;
-  const totalCommission = allocTotals?.total_commission  ?? 0;
-  const totalNet        = allocTotals?.total_net         ?? 0;   // what sellers owe owner
+    // 1. Allocations in period
+    db.prepare(`
+      SELECT COALESCE(SUM(total_gb),0) as gb,
+             COALESCE(SUM(total_gross),0) as gross,
+             COALESCE(SUM(total_commission),0) as comm,
+             COALESCE(SUM(total_net),0) as net
+      FROM allocation_batches ab WHERE company_id=? ${pfA}`)
+      .bind(user.company_id).first<any>(),
 
-  // ── Purchase cost (auto-calculated: GB × price from settings) ─────────
-  const totalPurchaseCost = Math.round(totalGb * purchasePricePerGb * 100) / 100;
+    // 2. Payments received in period
+    db.prepare(`
+      SELECT COALESCE(SUM(amount),0) as total
+      FROM payments WHERE company_id=? ${pfP}`)
+      .bind(user.company_id).first<{total:number}>(),
 
-  // ── Owner's net profit = Gross − Commission − Purchase Cost ──────────
-  const ownerNetProfit = totalGross - totalCommission - totalPurchaseCost;
+    // 3. Company expenses (all-time for capital)
+    db.prepare(`
+      SELECT COALESCE(SUM(amount),0) as total FROM expenses
+      WHERE company_id=? AND (seller_id IS NULL OR seller_id=0)`)
+      .bind(user.company_id).first<{total:number}>(),
 
-  // ── Total payments received from sellers ─────────────────
-  const payRow = await db.prepare(`
-    SELECT COALESCE(SUM(amount),0) as total_paid
-    FROM payments WHERE company_id=?
-  `).bind(user.company_id).first<{total_paid:number}>();
-  const totalPaid = payRow?.total_paid ?? 0;
+    // 4. Per-seller (all-time debt)
+    db.prepare(`
+      SELECT u.id as seller_id, u.full_name, u.commission_rate,
+             COALESCE(ab.total_gb,0) as total_gb,
+             COALESCE(ab.total_gross,0) as total_gross,
+             COALESCE(ab.total_commission,0) as total_commission,
+             COALESCE(ab.total_net,0) as total_net,
+             COALESCE(p.total_paid,0) as total_paid
+      FROM users u
+      LEFT JOIN (
+        SELECT seller_id, SUM(total_gb) as total_gb, SUM(total_gross) as total_gross,
+               SUM(total_commission) as total_commission, SUM(total_net) as total_net
+        FROM allocation_batches WHERE company_id=? GROUP BY seller_id
+      ) ab ON ab.seller_id=u.id
+      LEFT JOIN (
+        SELECT seller_id, SUM(amount) as total_paid
+        FROM payments WHERE company_id=? GROUP BY seller_id
+      ) p ON p.seller_id=u.id
+      WHERE u.company_id=? AND u.role='seller' AND u.active=1
+        AND (ab.total_gb IS NOT NULL OR p.total_paid IS NOT NULL)
+      ORDER BY ab.total_gb DESC`)
+      .bind(user.company_id, user.company_id, user.company_id).all<any>(),
 
-  // ── Remaining balance sellers still owe ──────────────────
-  const totalRemaining = totalNet - totalPaid;
-
-  // ── Company expenses ─────────────────────────────────────
-  const expRow = await db.prepare(`
-    SELECT COALESCE(SUM(amount),0) as total FROM expenses
-    WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0)
-  `).bind(user.company_id).first<{total:number}>();
-  const totalExpenses = expRow?.total ?? 0;
-
-  // ── Available capital = paid − purchase_cost − expenses ──
-  const availableCapital = totalPaid - totalPurchaseCost - totalExpenses;
-
-  // ── Per-seller breakdown (joined from allocation_batches + payments) ──
-  const sellerStats = await db.prepare(`
-    SELECT
-      u.id as seller_id,
-      u.full_name as seller_name,
-      u.commission_rate,
-      COALESCE(ab.total_gb,0)         as total_gb,
-      COALESCE(ab.total_gross,0)      as total_gross,
-      COALESCE(ab.total_commission,0) as total_commission,
-      COALESCE(ab.total_net,0)        as total_net,
-      COALESCE(p.total_paid,0)        as total_paid
-    FROM users u
-    LEFT JOIN (
-      SELECT seller_id,
-        SUM(total_gb)         as total_gb,
-        SUM(total_gross)      as total_gross,
-        SUM(total_commission) as total_commission,
-        SUM(total_net)        as total_net
-      FROM allocation_batches WHERE company_id=?
-      GROUP BY seller_id
-    ) ab ON ab.seller_id = u.id
-    LEFT JOIN (
-      SELECT seller_id, SUM(amount) as total_paid
+    // 5. 7-day payments chart
+    db.prepare(`
+      SELECT date(payment_date) as day, COALESCE(SUM(amount),0) as total
       FROM payments WHERE company_id=?
-      GROUP BY seller_id
-    ) p ON p.seller_id = u.id
-    WHERE u.company_id=? AND u.role='seller' AND u.active=1
-      AND (ab.total_gb IS NOT NULL OR p.total_paid IS NOT NULL)
-    ORDER BY ab.total_gb DESC
-  `).bind(user.company_id, user.company_id, user.company_id).all<any>();
+        AND payment_date >= date('now','-6 days')
+      GROUP BY day ORDER BY day ASC`)
+      .bind(user.company_id).all<any>(),
 
-  // ── Recent allocations (last 10) ──────────────────────────
-  const recentAllocs = await db.prepare(`
-    SELECT ab.id, ab.created_at, ab.total_gb, ab.total_gross, ab.total_commission, ab.total_net,
-           u.full_name as seller_name, br.name as branch_name
-    FROM allocation_batches ab
-    JOIN users u ON u.id = ab.seller_id
-    JOIN branches br ON br.id = ab.branch_id
-    WHERE ab.company_id=?
-    ORDER BY ab.created_at DESC LIMIT 10
-  `).bind(user.company_id).all<any>();
+    // 6. 6-month allocation trend
+    db.prepare(`
+      SELECT strftime('%Y-%m', created_at) as month,
+             COALESCE(SUM(total_gb),0) as gb,
+             COALESCE(SUM(total_net),0) as net
+      FROM allocation_batches WHERE company_id=?
+      GROUP BY month ORDER BY month DESC LIMIT 6`)
+      .bind(user.company_id).all<any>(),
 
-  // ── Recent payments (last 10) ─────────────────────────────
-  const recentPayments = await db.prepare(`
-    SELECT p.id, p.payment_date, p.amount, p.type, p.notes,
-           u.full_name as seller_name
-    FROM payments p
-    JOIN users u ON u.id = p.seller_id
-    WHERE p.company_id=?
-    ORDER BY p.payment_date DESC, p.created_at DESC LIMIT 10
-  `).bind(user.company_id).all<any>();
+    // 7. 6-month payments
+    db.prepare(`
+      SELECT strftime('%Y-%m', payment_date) as month,
+             COALESCE(SUM(amount),0) as paid
+      FROM payments WHERE company_id=?
+      GROUP BY month ORDER BY month DESC LIMIT 6`)
+      .bind(user.company_id).all<any>(),
+  ]);
 
-  // ── 7-day daily payments chart ────────────────────────────
-  const chart7Pay = await db.prepare(`
-    SELECT date(payment_date) as day,
-           COALESCE(SUM(amount),0) as total,
-           COUNT(*) as cnt
-    FROM payments WHERE company_id=?
-      AND payment_date >= date('now','-6 days')
-    GROUP BY day ORDER BY day ASC
-  `).bind(user.company_id).all<any>();
+  // ── Derived ──────────────────────────────────────────────
+  const totalGb         = allocPeriod?.gb ?? 0;
+  const totalGross      = allocPeriod?.gross ?? 0;
+  const totalCommission = allocPeriod?.comm ?? 0;
+  const totalNet        = allocPeriod?.net ?? 0;
+  const totalPaid       = payPeriod?.total ?? 0;
+  const totalExpenses   = expRow?.total ?? 0;
+  const purchaseCost    = Math.round(totalGb * purchasePricePerGb * 100) / 100;
+  const ownerNetProfit  = totalGross - totalCommission - purchaseCost;
+  const availableCapital= totalPaid - purchaseCost - totalExpenses;
+  const pl              = periodLabel(period);
 
-  // ── 6-month monthly trend (allocations + payments) ────────
-  const monthly6 = await db.prepare(`
-    SELECT
-      strftime('%Y-%m', ab.created_at) as month,
-      COALESCE(SUM(ab.total_gb),0)         as alloc_gb,
-      COALESCE(SUM(ab.total_gross),0)      as alloc_gross,
-      COALESCE(SUM(ab.total_commission),0) as alloc_comm,
-      COALESCE(SUM(ab.total_net),0)        as alloc_net
-    FROM allocation_batches ab
-    WHERE ab.company_id=?
-    GROUP BY month ORDER BY month DESC LIMIT 6
-  `).bind(user.company_id).all<any>();
-
-  const monthly6Pay = await db.prepare(`
-    SELECT strftime('%Y-%m', payment_date) as month,
-           COALESCE(SUM(amount),0) as paid
-    FROM payments WHERE company_id=?
-    GROUP BY month ORDER BY month DESC LIMIT 6
-  `).bind(user.company_id).all<any>();
-
-  // merge payment totals into monthly6 by month key
-  const payByMonth: Record<string,number> = Object.fromEntries(
-    (monthly6Pay.results||[]).map((r:any) => [r.month, r.paid])
-  );
-
-  // ── Build chart data (last 7 days) ────────────────────────
-  const days7: string[] = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate() - i);
-    days7.push(d.toISOString().split('T')[0]);
-  }
-  const payChartMap = Object.fromEntries((chart7Pay.results||[]).map((r:any)=>[r.day,r]));
-  const chartLabels7 = JSON.stringify(days7.map(d=>new Date(d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric'})));
-  const chartPayData = JSON.stringify(days7.map(d=>Math.round(payChartMap[d]?.total??0)));
-  const chartPayCnt  = JSON.stringify(days7.map(d=>payChartMap[d]?.cnt??0));
-
-  // ── Per-seller table rows ─────────────────────────────────
-  const sellerRows = (sellerStats.results || []).map((s: any) => {
-    const remaining = (s.total_net ?? 0) - (s.total_paid ?? 0);
-    const pct = s.total_net > 0
-      ? Math.min(100, Math.round((s.total_paid / s.total_net) * 100))
-      : 0;
-    const commPct = Math.round((s.commission_rate ?? 0) * 100);
-    const remColor = remaining > 0 ? 'var(--danger)' : remaining < 0 ? 'var(--success)' : 'var(--text-muted)';
-    return `
-    <tr>
-      <td><strong>${s.seller_name}</strong><div style="font-size:.7rem;color:var(--text-muted)">کمیسیون: ${commPct}%</div></td>
-      <td class="text-primary font-bold">${formatGB(s.total_gb)}</td>
-      <td style="color:var(--text-secondary)">${formatMoney(s.total_gross)}</td>
-      <td class="text-warning font-bold">−${formatMoney(s.total_commission)}<div style="font-size:.7rem">${commPct}%</div></td>
-      <td class="font-bold" style="color:#0891b2">${formatMoney(s.total_net)}</td>
-      <td class="text-success font-bold">${formatMoney(s.total_paid)}</td>
-      <td style="color:${remColor};font-weight:600">${formatMoney(Math.abs(remaining))}
-        <div style="font-size:.7rem;color:var(--text-muted)">${remaining > 0 ? '(بدهی)' : remaining < 0 ? '(اضافه)' : '(تسویه)'}</div>
+  // ── Seller rows ───────────────────────────────────────────
+  const sellerRows = (sellerStats.results||[]).map((s:any)=>{
+    const remaining = (s.total_net??0) - (s.total_paid??0);
+    const pct = s.total_net > 0 ? Math.min(100, Math.round((s.total_paid/s.total_net)*100)) : 0;
+    const rc  = remaining > 0 ? 'var(--danger)' : remaining < 0 ? 'var(--success)' : 'var(--text-muted)';
+    return `<tr>
+      <td><strong>${s.full_name}</strong></td>
+      <td class="text-primary">${formatGB(s.total_gb)}</td>
+      <td class="text-warning">−${formatMoney(s.total_commission)}</td>
+      <td style="color:#0891b2">${formatMoney(s.total_net)}</td>
+      <td class="text-success">${formatMoney(s.total_paid)}</td>
+      <td style="color:${rc};font-weight:600">${formatMoney(Math.abs(remaining))}
+        <span style="font-size:.68rem;color:var(--text-muted)">${remaining>0?'(بدهی)':remaining<0?'(اضافه)':'(تسویه)'}</span>
       </td>
       <td>
-        <div style="background:var(--bg-secondary);border-radius:99px;height:8px;width:70px;overflow:hidden">
-          <div style="background:${pct>=100?'var(--success)':'var(--primary)'};height:100%;width:${pct}%;border-radius:99px"></div>
+        <div style="background:var(--bg-secondary);border-radius:99px;height:6px;width:60px;overflow:hidden;display:inline-block">
+          <div style="background:${pct>=100?'var(--success)':'var(--primary)'};height:100%;width:${pct}%"></div>
         </div>
-        <div style="font-size:.7rem;color:var(--text-muted);margin-top:.2rem">${pct}%</div>
+        <span style="font-size:.68rem;color:var(--text-muted);margin-right:.3rem">${pct}%</span>
       </td>
-      <td><a href="/ledger/seller/${s.seller_id}" class="btn btn-outline btn-sm">📒 دفتر</a></td>
+      <td><a href="/ledger/seller/${s.seller_id}" class="btn btn-outline btn-sm">📒</a></td>
     </tr>`;
   }).join('');
 
-  const recentAllocRows = (recentAllocs.results || []).map((a: any) => `
-    <tr>
-      <td style="font-size:.8rem">${new Date(a.created_at).toLocaleDateString('en-GB')}</td>
-      <td><strong>${a.seller_name}</strong><div style="font-size:.72rem;color:var(--text-muted)">${a.branch_name}</div></td>
-      <td class="text-primary font-bold">${formatGB(a.total_gb)}</td>
-      <td style="color:var(--text-secondary)">${formatMoney(a.total_gross)}</td>
-      <td class="text-warning">−${formatMoney(a.total_commission)}</td>
-      <td class="text-success font-bold">${formatMoney(a.total_net)}</td>
-    </tr>`).join('');
+  // ── 6-month table rows ────────────────────────────────────
+  const payByMonth: Record<string,number> = Object.fromEntries(
+    (monthly6Pay.results||[]).map((r:any)=>[r.month, r.paid])
+  );
+  const monthlyRows = (monthly6.results||[]).map((m:any)=>{
+    const paid = payByMonth[m.month]??0;
+    return `<tr>
+      <td class="font-bold" style="font-size:.8rem">${m.month}</td>
+      <td class="text-primary">${formatGB(m.gb)}</td>
+      <td style="color:#0891b2">${formatMoney(m.net)}</td>
+      <td class="text-success">${formatMoney(paid)}</td>
+    </tr>`;
+  }).join('');
 
-  const recentPayRows = (recentPayments.results || []).map((p: any) => `
-    <tr>
-      <td style="font-size:.8rem">${p.payment_date}</td>
-      <td><strong>${p.seller_name}</strong></td>
-      <td><span class="badge badge-${p.type==='settlement'?'success':p.type==='commission'?'warning':'info'}">${p.type}</span></td>
-      <td class="text-success font-bold">+${formatMoney(p.amount)}</td>
-      <td style="font-size:.78rem;color:var(--text-muted)">${p.notes||'—'}</td>
-    </tr>`).join('');
+  // ── Chart data ────────────────────────────────────────────
+  const days7: string[] = [];
+  for (let i=6;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days7.push(d.toISOString().split('T')[0]);}
+  const cmap = Object.fromEntries((chart7Pay.results||[]).map((r:any)=>[r.day,r]));
+  const chartLabels7 = JSON.stringify(days7.map(d=>new Date(d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric'})));
+  const chartPayData = JSON.stringify(days7.map(d=>Math.round(cmap[d]?.total??0)));
 
   return `
   <!-- Page Header -->
   <div class="page-header">
     <div>
       <div class="page-title">💼 داشبورد مالی</div>
-      <div class="page-subtitle">${company?.name ?? ''} · خلاصه کلی</div>
+      <div class="page-subtitle">${company?.name??''} · ${pl}</div>
     </div>
     <div class="btn-group">
       <a href="/dashboard?mode=owner" class="btn btn-outline btn-sm">📊 حالت مالک</a>
-      <a href="/allocations" class="btn btn-outline btn-sm">🔀 تخصیص‌ها</a>
       <a href="/payments" class="btn btn-outline btn-sm">💰 دریافتی‌ها</a>
     </div>
   </div>
 
-  <!-- 6 KPI CARDS (formula strip moved to bottom) -->
+  <!-- Period Filter -->
+  <div style="margin-bottom:1.25rem;display:flex;gap:.4rem;flex-wrap:wrap">
+    ${periodBtns(period, '/dashboard?mode=financial')}
+  </div>
+
+  <!-- 4 KPI Cards -->
   <div class="stats-grid" style="margin-bottom:1.25rem">
+
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#7c3aed"></div>
-      <div class="stat-label">📦 کل تخصیص</div>
+      <div class="stat-label">📦 تخصیص · ${pl}</div>
       <div class="stat-value" style="color:#7c3aed">${formatGB(totalGb)}</div>
       <div class="stat-sub">${formatMoney(totalGross)} ناخالص</div>
     </div>
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:#d97706"></div>
-      <div class="stat-label">🏷️ خالص بدهی فروشندگان</div>
-      <div class="stat-value warning">${formatMoney(totalNet)}</div>
-      <div class="stat-sub">کمیسیون ${formatMoney(totalCommission)} کسر شد</div>
-    </div>
+
     <div class="stat-card">
       <div class="stat-card-accent" style="background:var(--success)"></div>
-      <div class="stat-label">✅ دریافتی از فروشندگان</div>
+      <div class="stat-label">✅ دریافتی · ${pl}</div>
       <div class="stat-value success">${formatMoney(totalPaid)}</div>
-      <div class="stat-sub">total received</div>
+      <div class="stat-sub">از فروشندگان</div>
     </div>
-    <div class="stat-card">
-      <div class="stat-card-accent" style="background:${totalRemaining>0?'var(--danger)':'var(--success)'}"></div>
-      <div class="stat-label">⏳ باقی‌مانده بدهی</div>
-      <div class="stat-value" style="color:${totalRemaining>0?'var(--danger)':'var(--success)'}">${formatMoney(Math.abs(totalRemaining))}</div>
-      <div class="stat-sub">${totalRemaining>0?'هنوز نپرداخته':'اضافه پرداخت'}</div>
-    </div>
+
     <div class="stat-card">
       <div class="stat-card-accent" style="background:#f97316"></div>
-      <div class="stat-label">💸 مصارف شرکت</div>
+      <div class="stat-label">💸 مصارف (کل)</div>
       <div class="stat-value" style="color:#f97316">${formatMoney(totalExpenses)}</div>
       <div class="stat-sub"><a href="/expenses" style="color:var(--primary);font-size:.75rem">مدیریت →</a></div>
     </div>
+
     <div class="stat-card" style="background:${availableCapital>=0?'linear-gradient(135deg,#dcfce7,var(--bg-secondary))':'linear-gradient(135deg,#fee2e2,var(--bg-secondary))'}">
       <div class="stat-card-accent" style="background:${availableCapital>=0?'var(--success)':'var(--danger)'}"></div>
       <div class="stat-label">💎 سرمایه موجود</div>
-      <div class="stat-value" style="color:${availableCapital>=0?'var(--success)':'var(--danger)'};font-size:1.35rem">${formatMoney(availableCapital)}</div>
+      <div class="stat-value" style="color:${availableCapital>=0?'var(--success)':'var(--danger)'}">${formatMoney(availableCapital)}</div>
       <div class="stat-sub">دریافتی − خرید − مصارف</div>
     </div>
+
   </div>
 
-  <!-- CHART (7-day) + MONTHLY TREND (6 months) -->
-  <div class="grid-chart-trend">
+  <!-- Chart + 6-month trend -->
+  <div class="grid-chart-trend" style="margin-bottom:1rem">
 
-    <!-- 7-Day Payments Bar Chart -->
     <div class="card">
       <div class="card-header">
         <div class="card-title">📈 دریافتی‌ها — ۷ روز اخیر</div>
-        <span style="font-size:.72rem;color:var(--text-muted)">روزانه</span>
       </div>
       <div style="padding:.75rem 1rem 1rem">
-        <canvas id="invChart" height="130"></canvas>
+        <canvas id="invChart" height="140"></canvas>
       </div>
     </div>
 
-    <!-- 6-Month Monthly Trend -->
     <div class="card">
       <div class="card-header">
         <div class="card-title">📅 روند ۶ ماهه</div>
@@ -1333,35 +879,16 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
       ${(monthly6.results||[]).length ? `
       <div class="table-wrapper">
         <table>
-          <thead><tr>
-            <th>ماه</th>
-            <th>GB</th>
-            <th>خالص بدهی</th>
-            <th>دریافتی</th>
-          </tr></thead>
-          <tbody>
-            ${(monthly6.results||[]).map((m:any) => {
-              const paid = payByMonth[m.month] ?? 0;
-              const rem  = m.alloc_net - paid;
-              return `<tr>
-                <td class="font-bold" style="font-size:.8rem">${m.month}</td>
-                <td class="text-primary">${formatGB(m.alloc_gb)}</td>
-                <td style="color:#0891b2">${formatMoney(m.alloc_net)}</td>
-                <td class="text-success">${formatMoney(paid)}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
+          <thead><tr><th>ماه</th><th>GB</th><th>خالص بدهی</th><th>دریافتی</th></tr></thead>
+          <tbody>${monthlyRows}</tbody>
         </table>
-      </div>` : `
-      <div class="empty-state" style="padding:2rem">
-        <div class="empty-state-icon">📅</div>
-        <h3>هنوز داده‌ای نیست</h3>
-      </div>`}
+      </div>` : `<div class="empty-state" style="padding:2rem"><div class="empty-state-icon">📅</div><h3>هنوز داده‌ای نیست</h3></div>`}
     </div>
+
   </div>
 
-  <!-- PER-SELLER TABLE -->
-  <div class="card" style="margin-bottom:1.25rem">
+  <!-- Per-seller table -->
+  <div class="card" style="margin-bottom:1rem">
     <div class="card-header">
       <div class="card-title">👥 وضعیت مالی فروشندگان</div>
       <a href="/ledger" class="btn btn-outline btn-sm">📒 دفتر کل</a>
@@ -1370,84 +897,40 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
     <div class="table-wrapper">
       <table>
         <thead><tr>
-          <th>فروشنده</th>
-          <th>GB تخصیص</th>
-          <th>ناخالص</th>
-          <th>کمیسیون</th>
-          <th>خالص بدهی</th>
-          <th>دریافتی</th>
-          <th>باقی‌مانده</th>
-          <th>پیشرفت</th>
-          <th></th>
+          <th>فروشنده</th><th>GB تخصیص</th><th>کمیسیون</th>
+          <th>خالص بدهی</th><th>دریافتی</th><th>باقی‌مانده</th>
+          <th>پیشرفت</th><th></th>
         </tr></thead>
         <tbody>${sellerRows}</tbody>
       </table>
-    </div>` : `
-    <div class="empty-state"><div class="empty-state-icon">👥</div><h3>هنوز تخصیصی ثبت نشده</h3></div>`}
+    </div>` : `<div class="empty-state"><div class="empty-state-icon">👥</div><h3>هنوز تخصیصی ثبت نشده</h3></div>`}
   </div>
 
-  <!-- TWO-COLUMN: RECENT ALLOCATIONS + RECENT PAYMENTS -->
-  <div class="grid-2col">
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">🔀 آخرین تخصیص‌ها</div>
-        <a href="/allocations" class="btn btn-outline btn-sm">همه →</a>
-      </div>
-      ${(recentAllocs.results||[]).length ? `
-      <div class="table-wrapper">
-        <table>
-          <thead><tr>
-            <th>تاریخ</th><th>فروشنده</th><th>GB</th>
-            <th>ناخالص</th><th>کمیسیون</th><th>خالص</th>
-          </tr></thead>
-          <tbody>${recentAllocRows}</tbody>
-        </table>
-      </div>` : `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">🔀</div><h3>بدون تخصیص</h3></div>`}
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">💰 آخرین دریافتی‌ها</div>
-        <a href="/payments" class="btn btn-outline btn-sm">همه →</a>
-      </div>
-      ${(recentPayments.results||[]).length ? `
-      <div class="table-wrapper">
-        <table>
-          <thead><tr><th>تاریخ</th><th>فروشنده</th><th>نوع</th><th>دریافتی</th><th>یادداشت</th></tr></thead>
-          <tbody>${recentPayRows}</tbody>
-        </table>
-      </div>` : `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">💰</div><h3>بدون دریافتی</h3></div>`}
-    </div>
-  </div>
-
-  <!-- FORMULA STRIP (moved to bottom) -->
+  <!-- Formula Strip (bottom) -->
   <div class="formula-strip">
     <div class="formula-strip-group">
-      <span style="color:#94a3b8;font-size:.7rem">ناخالص</span>
+      <span style="color:#94a3b8;font-size:.7rem">ناخالص · ${pl}</span>
       <span style="color:#e2e8f0;font-weight:700">${formatMoney(totalGross)}</span>
       <span class="formula-strip-sep">−</span>
       <span style="color:#94a3b8;font-size:.7rem">کمیسیون</span>
       <span style="color:#fbbf24;font-weight:700">${formatMoney(totalCommission)}</span>
       <span class="formula-strip-sep">−</span>
       <span style="color:#94a3b8;font-size:.7rem">خرید</span>
-      <span style="color:#f97316;font-weight:700">${formatMoney(totalPurchaseCost)}</span>
+      <span style="color:#f97316;font-weight:700">${formatMoney(purchaseCost)}</span>
       <span class="formula-strip-sep">=</span>
       <span style="color:#94a3b8;font-size:.7rem">سود خالص</span>
-      <span style="color:${ownerNetProfit>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney(ownerNetProfit)}</span>
+      <span style="color:${ownerNetProfit>=0?'#34d399':'#f87171'};font-weight:700">${formatMoney(ownerNetProfit)}</span>
     </div>
     <div class="formula-strip-divider"></div>
     <div class="formula-strip-group">
       <span style="color:#94a3b8;font-size:.7rem">دریافتی</span>
       <span style="color:#34d399;font-weight:700">${formatMoney(totalPaid)}</span>
       <span class="formula-strip-sep">−</span>
-      <span style="color:#94a3b8;font-size:.7rem">خرید</span>
-      <span style="color:#f97316;font-weight:700">${formatMoney(totalPurchaseCost)}</span>
-      <span class="formula-strip-sep">−</span>
-      <span style="color:#94a3b8;font-size:.7rem">مصارف</span>
-      <span style="color:#fb923c;font-weight:700">${formatMoney(totalExpenses)}</span>
+      <span style="color:#94a3b8;font-size:.7rem">خرید + مصارف</span>
+      <span style="color:#f97316;font-weight:700">${formatMoney(purchaseCost + totalExpenses)}</span>
       <span class="formula-strip-sep">=</span>
       <span style="color:#94a3b8;font-size:.7rem">سرمایه موجود</span>
-      <span style="color:${availableCapital>=0?'#34d399':'#f87171'};font-weight:700;font-size:.95rem">${formatMoney(availableCapital)}</span>
+      <span style="color:${availableCapital>=0?'#34d399':'#f87171'};font-weight:700">${formatMoney(availableCapital)}</span>
     </div>
   </div>
 
@@ -1455,34 +938,27 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script>
   (function(){
-    const ctx = document.getElementById('invChart');
+    const ctx=document.getElementById('invChart');
     if(!ctx) return;
-    new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: ${chartLabels7},
-        datasets: [{
-          label: 'دریافتی',
-          data: ${chartPayData},
-          backgroundColor: 'rgba(52,211,153,.55)',
-          borderColor: '#10b981',
-          borderWidth: 1.5,
-          borderRadius: 5
+    new Chart(ctx,{
+      type:'bar',
+      data:{
+        labels:${chartLabels7},
+        datasets:[{
+          label:'دریافتی',
+          data:${chartPayData},
+          backgroundColor:'rgba(52,211,153,.55)',
+          borderColor:'#10b981',
+          borderWidth:1.5,
+          borderRadius:5
         }]
       },
-      options: {
-        responsive: true,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: ctx => ' ؋' + Math.round(ctx.parsed.y).toLocaleString()
-            }
-          }
-        },
-        scales: {
-          x: { grid:{color:'rgba(148,163,184,.08)'}, ticks:{color:'var(--text-muted)',font:{size:10}} },
-          y: { grid:{color:'rgba(148,163,184,.08)'}, ticks:{color:'#10b981',font:{size:10}, callback: v=>'؋'+Math.round(v).toLocaleString()} }
+      options:{
+        responsive:true,
+        plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' ؋'+Math.round(c.parsed.y).toLocaleString()}}},
+        scales:{
+          x:{grid:{color:'rgba(148,163,184,.08)'},ticks:{color:'var(--text-muted)',font:{size:10}}},
+          y:{grid:{color:'rgba(148,163,184,.08)'},ticks:{color:'#10b981',font:{size:10},callback:v=>'؋'+Math.round(v).toLocaleString()}}
         }
       }
     });
@@ -1493,23 +969,22 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang):
 
 // ---- Router ----
 dashboard.get('/', async (c) => {
-  const user = c.get('user');
-  const lang = c.get('lang');
-  const period = c.req.query('period') ?? 'all';
+  const user   = c.get('user');
+  const lang   = c.get('lang');
+  const period = c.req.query('period') ?? 'today';   // ← default = today
   const mode   = c.req.query('mode') ?? '';
 
   let bodyHtml: string;
   if (user.role === 'owner') {
-    // Check company settings for dashboard_mode
     const company = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?')
       .bind(user.company_id).first<{settings:string}>();
-    const settings = JSON.parse(company?.settings || '{}');
-    const dashMode = mode || settings.dashboard_mode || 'owner';
+    const settings  = JSON.parse(company?.settings || '{}');
+    const dashMode  = mode || settings.dashboard_mode || 'owner';
 
     if (dashMode === 'financial') {
-      bodyHtml = await investorDashboard(c.env.DB, user, lang);
+      bodyHtml = await investorDashboard(c.env.DB, user, lang, period);
     } else {
-      bodyHtml = await ownerDashboard(c.env.DB, user, lang);
+      bodyHtml = await ownerDashboard(c.env.DB, user, lang, period);
     }
   } else {
     bodyHtml = await sellerDashboard(c.env.DB, user, lang, period);
