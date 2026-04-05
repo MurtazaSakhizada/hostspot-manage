@@ -20,30 +20,86 @@ const dashboard = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 //   Net Profit = Gross Revenue - Commissions - Purchase Cost
 //   Available Capital = Net Profit - Total Expenses
 // ============================================================
-// ── Period helper ────────────────────────────────────────
-function getPeriodFilter(period: string, col = 'snapshot_time') {
-  if (period === 'today') return `AND date(${col}) = date('now')`;
-  if (period === 'week')  return `AND ${col} >= datetime('now','-7 days')`;
-  if (period === 'month') return `AND ${col} >= datetime('now','-30 days')`;
-  if (period === 'year')  return `AND ${col} >= datetime('now','-365 days')`;
+// ── Period / date-range helpers ──────────────────────────
+
+/**
+ * Build SQL WHERE fragment.
+ * If dateFrom/dateTo are provided they take precedence over period.
+ */
+function getPeriodFilter(
+  period: string,
+  col = 'snapshot_time',
+  dateFrom = '',
+  dateTo   = ''
+) {
+  if (dateFrom && dateTo)  return `AND date(${col}) BETWEEN '${dateFrom}' AND '${dateTo}'`;
+  if (dateFrom)            return `AND date(${col}) >= '${dateFrom}'`;
+  if (dateTo)              return `AND date(${col}) <= '${dateTo}'`;
+  if (period === 'today')  return `AND date(${col}) = date('now')`;
+  if (period === 'week')   return `AND ${col} >= datetime('now','-7 days')`;
+  if (period === 'month')  return `AND ${col} >= datetime('now','-30 days')`;
+  if (period === 'year')   return `AND ${col} >= datetime('now','-365 days')`;
   return '';
 }
-function getPeriodLabel(p: string) {
+
+function getPeriodLabel(p: string, from = '', to = '') {
+  if (from || to) return `${from || '…'} تا ${to || '…'}`;
   return p==='today'?'امروز':p==='week'?'این هفته':p==='month'?'این ماه':p==='year'?'امسال':'همه وقت';
 }
-function renderPeriodBtns(current: string, base = '/dashboard') {
-  return ['today','week','month','year','all'].map(p => `
-    <a href="${base}?period=${p}" class="btn btn-sm ${current===p?'btn-primary':'btn-outline'}" style="white-space:nowrap">
-      ${p==='today'?'📅 امروز':p==='week'?'📅 این هفته':p==='month'?'📅 این ماه':p==='year'?'📅 امسال':'📅 همه وقت'}
-    </a>`).join('');
+
+/** Renders period quick-buttons + from/to date inputs */
+function renderPeriodBar(
+  current: string,
+  base   = '/dashboard',
+  from   = '',
+  to     = '',
+  extra  = ''          // extra query params to keep, e.g. '&mode=financial'
+) {
+  const periods = ['today','week','month','year','all'];
+  const labels: Record<string,string> = {
+    today:'امروز', week:'این هفته', month:'این ماه', year:'امسال', all:'همه وقت'
+  };
+  const btns = periods.map(p => {
+    const active = current === p && !from && !to;
+    return `<a href="${base}?period=${p}${extra}"
+        class="btn btn-sm ${active?'btn-primary':'btn-outline'}"
+        style="white-space:nowrap">📅 ${labels[p]}</a>`;
+  }).join('');
+
+  return `
+  <form method="GET" action="${base}" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:1.25rem">
+    ${extra ? extra.replace(/^&/,'').split('&').map(kv => {
+      const [k,v] = kv.split('=');
+      return `<input type="hidden" name="${k}" value="${v||''}">`;
+    }).join('') : ''}
+    ${btns}
+    <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-right:.5rem">
+      <label style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">از تاریخ:</label>
+      <input type="date" name="from" value="${from}"
+        style="padding:.3rem .5rem;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--bg-secondary);color:var(--text-primary)">
+      <label style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">تا تاریخ:</label>
+      <input type="date" name="to" value="${to}"
+        style="padding:.3rem .5rem;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--bg-secondary);color:var(--text-primary)">
+      <button type="submit" class="btn btn-sm btn-primary" style="white-space:nowrap">🔍 اعمال</button>
+      ${(from||to)?`<a href="${base}?period=${current}${extra}" class="btn btn-sm btn-outline" style="white-space:nowrap">✕ پاک‌کردن</a>`:''}
+    </div>
+  </form>`;
 }
 
-async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang, period: string): Promise<string> {
+// Keep backward-compat alias
+function renderPeriodBtns(current: string, base = '/dashboard') {
+  return renderPeriodBar(current, base);
+}
 
-  const pf  = getPeriodFilter(period);
-  const pfP = getPeriodFilter(period, 'payment_date');
-  const pfE = getPeriodFilter(period, 'expense_date');
-  const pl  = getPeriodLabel(period);
+async function ownerDashboard(
+  db: D1Database, user: SessionUser, lang: Lang,
+  period: string, dateFrom = '', dateTo = ''
+): Promise<string> {
+
+  const pf  = getPeriodFilter(period, 'snapshot_time', dateFrom, dateTo);
+  const pfP = getPeriodFilter(period, 'payment_date',  dateFrom, dateTo);
+  const pfE = getPeriodFilter(period, 'expense_date',  dateFrom, dateTo);
+  const pl  = getPeriodLabel(period, dateFrom, dateTo);
 
   // ── Company purchase price ───────────────────────────────
   const company = await db.prepare('SELECT name, settings FROM companies WHERE id=?')
@@ -184,10 +240,7 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang, per
     </div>
   </div>
 
-  <!-- Period Filter -->
-  <div style="margin-bottom:1.25rem;display:flex;gap:.4rem;flex-wrap:wrap">
-    ${renderPeriodBtns(period)}
-  </div>
+  ${renderPeriodBar(period, '/dashboard', dateFrom, dateTo)}
 
   <!-- PRIMARY KPIs — 6 cards -->
   <div class="stats-grid" style="margin-bottom:1.25rem">
@@ -317,11 +370,17 @@ async function ownerDashboard(db: D1Database, user: SessionUser, lang: Lang, per
 // ============================================================
 // SELLER DASHBOARD - Full rebuild with bug fixes
 // ============================================================
-async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, period: string): Promise<string> {
+async function sellerDashboard(
+  db: D1Database, user: SessionUser, lang: Lang,
+  period: string, dateFrom = '', dateTo = ''
+): Promise<string> {
 
-  // ── Date filter for selected period ────────────────────────
+  // ── Date filter for selected period / range ─────────────────
   let dateFilter = '';
-  if (period === 'today') dateFilter = `AND date(s.snapshot_time) = date('now')`;
+  if (dateFrom && dateTo)  dateFilter = `AND date(s.snapshot_time) BETWEEN '${dateFrom}' AND '${dateTo}'`;
+  else if (dateFrom)       dateFilter = `AND date(s.snapshot_time) >= '${dateFrom}'`;
+  else if (dateTo)         dateFilter = `AND date(s.snapshot_time) <= '${dateTo}'`;
+  else if (period === 'today') dateFilter = `AND date(s.snapshot_time) = date('now')`;
   else if (period === 'week')  dateFilter = `AND s.snapshot_time >= datetime('now','-7 days')`;
   else if (period === 'month') dateFilter = `AND s.snapshot_time >= datetime('now','-30 days')`;
   else if (period === 'year')  dateFilter = `AND s.snapshot_time >= datetime('now','-365 days')`;
@@ -491,23 +550,10 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
   const chartCnt   = JSON.stringify(days7.map(d => chartMap[d]?.cnt ?? 0));
 
   // ── Period label ──────────────────────────────────────────
-  const periodLabel = period === 'today' ? 'امروز'
-    : period === 'week'  ? 'این هفته'
-    : period === 'month' ? 'این ماه'
-    : period === 'year'  ? 'امسال'
-    : 'همه وقت';
+  const periodLabel = getPeriodLabel(period, dateFrom, dateTo);
 
-  // ── Period selector buttons ───────────────────────────────
-  const periodBtns = ['today','week','month','year','all'].map(p => `
-    <a href="/dashboard?period=${p}"
-       class="btn btn-sm ${period === p ? 'btn-primary' : 'btn-outline'}"
-       style="white-space:nowrap">${
-         p === 'today' ? '📅 امروز'
-       : p === 'week'  ? '📅 این هفته'
-       : p === 'month' ? '📅 این ماه'
-       : p === 'year'  ? '📅 امسال'
-       :                 '📅 همه وقت'
-    }</a>`).join('');
+  // ── Period selector bar (with date-range inputs) ──────────
+  const periodBtns = renderPeriodBar(period, '/dashboard', dateFrom, dateTo);
 
   // ── Helper: format date ───────────────────────────────────
   function fdate(d: string) {
@@ -626,10 +672,7 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
     </a>
   </div>
 
-  <!-- Period Filter -->
-  <div style="margin-bottom:1.25rem;display:flex;gap:.4rem;flex-wrap:wrap">
-    ${periodBtns}
-  </div>
+  ${periodBtns}
 
   <!-- ══════════════════════════════════════════
        ROW 1 – KPI CARDS (6 cards)
@@ -1088,11 +1131,14 @@ async function sellerDashboard(db: D1Database, user: SessionUser, lang: Lang, pe
 //   باقی‌مانده            = Net (seller owes) − Paid
 //   سرمایه موجود         = Paid − مصارف شرکت
 // ============================================================
-async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang, period: string): Promise<string> {
+async function investorDashboard(
+  db: D1Database, user: SessionUser, lang: Lang,
+  period: string, dateFrom = '', dateTo = ''
+): Promise<string> {
 
-  const pfA = getPeriodFilter(period, 'created_at');
-  const pfP = getPeriodFilter(period, 'payment_date');
-  const pl  = getPeriodLabel(period);
+  const pfA = getPeriodFilter(period, 'created_at',   dateFrom, dateTo);
+  const pfP = getPeriodFilter(period, 'payment_date', dateFrom, dateTo);
+  const pl  = getPeriodLabel(period, dateFrom, dateTo);
 
   // ── Company settings (purchase price per GB) ─────────────
   const company = await db.prepare('SELECT name, settings FROM companies WHERE id=?')
@@ -1301,10 +1347,7 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang, 
     </div>
   </div>
 
-  <!-- Period Filter -->
-  <div style="margin-bottom:1.25rem;display:flex;gap:.4rem;flex-wrap:wrap">
-    ${renderPeriodBtns(period, '/dashboard?mode=financial')}
-  </div>
+  ${renderPeriodBar(period, '/dashboard', dateFrom, dateTo, '&mode=financial')}
 
   <!-- 6 KPI CARDS -->
   <div class="stats-grid" style="margin-bottom:1.25rem">
@@ -1529,10 +1572,12 @@ async function investorDashboard(db: D1Database, user: SessionUser, lang: Lang, 
 
 // ---- Router ----
 dashboard.get('/', async (c) => {
-  const user = c.get('user');
-  const lang = c.get('lang');
-  const period = c.req.query('period') ?? 'today';   // ← پیش‌فرض: امروز
-  const mode   = c.req.query('mode') ?? '';
+  const user     = c.get('user');
+  const lang     = c.get('lang');
+  const period   = c.req.query('period') ?? 'today';   // ← پیش‌فرض: امروز
+  const mode     = c.req.query('mode')   ?? '';
+  const dateFrom = c.req.query('from')   ?? '';
+  const dateTo   = c.req.query('to')     ?? '';
 
   let bodyHtml: string;
   if (user.role === 'owner') {
@@ -1543,12 +1588,12 @@ dashboard.get('/', async (c) => {
     const dashMode = mode || settings.dashboard_mode || 'owner';
 
     if (dashMode === 'financial') {
-      bodyHtml = await investorDashboard(c.env.DB, user, lang, period);
+      bodyHtml = await investorDashboard(c.env.DB, user, lang, period, dateFrom, dateTo);
     } else {
-      bodyHtml = await ownerDashboard(c.env.DB, user, lang, period);
+      bodyHtml = await ownerDashboard(c.env.DB, user, lang, period, dateFrom, dateTo);
     }
   } else {
-    bodyHtml = await sellerDashboard(c.env.DB, user, lang, period);
+    bodyHtml = await sellerDashboard(c.env.DB, user, lang, period, dateFrom, dateTo);
   }
 
   return c.html(pageShell({

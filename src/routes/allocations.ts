@@ -14,14 +14,57 @@ type Variables = { user: SessionUser; lang: Lang };
 
 const allocations = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
+// ── Shared date-filter helper ─────────────────────────────
+function buildAllocDateFilter(period: string, col: string, from: string, to: string) {
+  if (from && to)  return `AND date(${col}) BETWEEN '${from}' AND '${to}'`;
+  if (from)        return `AND date(${col}) >= '${from}'`;
+  if (to)          return `AND date(${col}) <= '${to}'`;
+  if (period === 'today') return `AND date(${col}) = date('now')`;
+  if (period === 'week')  return `AND ${col} >= datetime('now','-7 days')`;
+  if (period === 'month') return `AND ${col} >= datetime('now','-30 days')`;
+  if (period === 'year')  return `AND ${col} >= datetime('now','-365 days')`;
+  return '';
+}
+
+function buildAllocPeriodBar(period: string, from: string, to: string) {
+  const periods = ['today','week','month','year','all'];
+  const labels: Record<string,string> = {
+    today:'امروز', week:'این هفته', month:'این ماه', year:'امسال', all:'همه وقت'
+  };
+  const btns = periods.map(p => {
+    const active = period === p && !from && !to;
+    return `<a href="/allocations?period=${p}"
+        class="btn btn-sm ${active?'btn-primary':'btn-outline'}"
+        style="white-space:nowrap">📅 ${labels[p]}</a>`;
+  }).join('');
+  return `
+  <form method="GET" action="/allocations" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:1.25rem">
+    ${btns}
+    <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-right:.5rem">
+      <label style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">از تاریخ:</label>
+      <input type="date" name="from" value="${from}"
+        style="padding:.3rem .5rem;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--bg-secondary);color:var(--text-primary)">
+      <label style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">تا تاریخ:</label>
+      <input type="date" name="to" value="${to}"
+        style="padding:.3rem .5rem;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--bg-secondary);color:var(--text-primary)">
+      <button type="submit" class="btn btn-sm btn-primary" style="white-space:nowrap">🔍 اعمال</button>
+      ${(from||to)?`<a href="/allocations?period=${period}" class="btn btn-sm btn-outline">✕ پاک‌کردن</a>`:''}
+    </div>
+  </form>`;
+}
+
 // ============================================================
 // Main page: Allocation Batch History
 // ============================================================
 allocations.get('/', async (c) => {
-  const user = c.get('user');
-  const lang = c.get('lang');
+  const user   = c.get('user');
+  const lang   = c.get('lang');
+  const period = c.req.query('period') ?? 'all';
+  const from   = c.req.query('from')   ?? '';
+  const to     = c.req.query('to')     ?? '';
 
-  const sellerFilter = user.role === 'seller' ? `AND seller_id = ${user.id}` : '';
+  const sellerFilter = user.role === 'seller' ? `AND ab.seller_id = ${user.id}` : '';
+  const dateFilter   = buildAllocDateFilter(period, 'ab.created_at', from, to);
 
   // ---- Batch history ----
   const batches = await c.env.DB.prepare(`
@@ -30,16 +73,19 @@ allocations.get('/', async (c) => {
     FROM allocation_batches ab
     JOIN users u ON u.id = ab.seller_id
     JOIN branches br ON br.id = ab.branch_id
-    WHERE ab.company_id=? ${sellerFilter}
+    WHERE ab.company_id=? ${sellerFilter} ${dateFilter}
     ORDER BY ab.created_at DESC`).bind(user.company_id).all<any>();
 
-  // ---- Grand totals ----
+  // ---- Grand totals (filtered) ----
+  const dfTotals = buildAllocDateFilter(period, 'created_at', from, to);
+  const sfTotals = user.role === 'seller' ? `AND seller_id = ${user.id}` : '';
   const totals = await c.env.DB.prepare(`
     SELECT COALESCE(SUM(total_gb),0) as gb,
            COALESCE(SUM(total_gross),0) as gross,
            COALESCE(SUM(total_commission),0) as comm,
            COALESCE(SUM(total_net),0) as net
-    FROM allocation_batches WHERE company_id=? ${sellerFilter}`).bind(user.company_id).first<any>();
+    FROM allocation_batches WHERE company_id=? ${sfTotals} ${dfTotals}`)
+    .bind(user.company_id).first<any>();
 
   // ---- Build batch details (load lines for each batch) ----
   const batchesWithLines: Array<{batch: any; lineRows: string}> = [];
@@ -185,6 +231,8 @@ allocations.get('/', async (c) => {
       </div>
       ${user.role==='owner'?`<a href="/allocations/add" class="btn btn-primary">+ Allocate to Seller</a>`:''}
     </div>
+
+    ${buildAllocPeriodBar(period, from, to)}
 
     <!-- Summary Stats -->
     <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">

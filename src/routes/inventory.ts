@@ -13,29 +13,78 @@ type Variables = { user: SessionUser; lang: Lang };
 
 const inventory = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
+// ── Shared filter helper (same pattern as dashboard) ─────────
+function buildDateFilter(period: string, col: string, from: string, to: string) {
+  if (from && to)  return `AND date(${col}) BETWEEN '${from}' AND '${to}'`;
+  if (from)        return `AND date(${col}) >= '${from}'`;
+  if (to)          return `AND date(${col}) <= '${to}'`;
+  if (period === 'today') return `AND date(${col}) = date('now')`;
+  if (period === 'week')  return `AND ${col} >= datetime('now','-7 days')`;
+  if (period === 'month') return `AND ${col} >= datetime('now','-30 days')`;
+  if (period === 'year')  return `AND ${col} >= datetime('now','-365 days')`;
+  return '';
+}
+
+function buildPeriodBar(period: string, base: string, from: string, to: string, extra = '') {
+  const periods = ['today','week','month','year','all'];
+  const labels: Record<string,string> = {
+    today:'امروز', week:'این هفته', month:'این ماه', year:'امسال', all:'همه وقت'
+  };
+  const btns = periods.map(p => {
+    const active = period === p && !from && !to;
+    return `<a href="${base}?period=${p}${extra}"
+        class="btn btn-sm ${active?'btn-primary':'btn-outline'}"
+        style="white-space:nowrap">📅 ${labels[p]}</a>`;
+  }).join('');
+  return `
+  <form method="GET" action="${base}" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:1.25rem">
+    ${extra ? extra.replace(/^&/,'').split('&').map((kv:string) => {
+      const [k,v] = kv.split('=');
+      return `<input type="hidden" name="${k}" value="${v||''}">`;
+    }).join('') : ''}
+    ${btns}
+    <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-right:.5rem">
+      <label style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">از تاریخ:</label>
+      <input type="date" name="from" value="${from}"
+        style="padding:.3rem .5rem;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--bg-secondary);color:var(--text-primary)">
+      <label style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">تا تاریخ:</label>
+      <input type="date" name="to" value="${to}"
+        style="padding:.3rem .5rem;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--bg-secondary);color:var(--text-primary)">
+      <button type="submit" class="btn btn-sm btn-primary" style="white-space:nowrap">🔍 اعمال</button>
+      ${(from||to)?`<a href="${base}?period=${period}${extra}" class="btn btn-sm btn-outline">✕ پاک‌کردن</a>`:''}
+    </div>
+  </form>`;
+}
+
 // ============================================================
 // Main page: Owner sees full stock batches; Seller sees own allocations
 // ============================================================
 inventory.get('/', async (c) => {
-  const user = c.get('user');
-  const lang = c.get('lang');
+  const user   = c.get('user');
+  const lang   = c.get('lang');
+  const period = c.req.query('period') ?? 'all';
+  const from   = c.req.query('from')   ?? '';
+  const to     = c.req.query('to')     ?? '';
 
   // ── SELLER VIEW: shows their own allocated stock ──────────
   if (user.role !== 'owner') {
+    // For seller: filter allocation_batches by created_at
+    const df = buildDateFilter(period, 'ab.created_at', from, to);
+
     const [allocBatches, allocTotals, soldTotals] = await Promise.all([
       c.env.DB.prepare(`
         SELECT ab.*, br.name as branch_name,
           (SELECT COUNT(*) FROM allocation_batch_lines WHERE batch_id=ab.id) as line_count
         FROM allocation_batches ab
         JOIN branches br ON br.id = ab.branch_id
-        WHERE ab.company_id=? AND ab.seller_id=?
+        WHERE ab.company_id=? AND ab.seller_id=? ${df}
         ORDER BY ab.created_at DESC`).bind(user.company_id, user.id).all<any>(),
 
       c.env.DB.prepare(`
         SELECT COALESCE(SUM(total_gb),0) as gb,
                COALESCE(SUM(total_gross),0) as gross,
                COUNT(*) as batches
-        FROM allocation_batches WHERE company_id=? AND seller_id=?`)
+        FROM allocation_batches ab WHERE company_id=? AND seller_id=? ${df}`)
         .bind(user.company_id, user.id).first<any>(),
 
       c.env.DB.prepare(`
@@ -104,6 +153,8 @@ inventory.get('/', async (c) => {
         <a href="/sales/add" class="btn btn-primary">+ ${t(lang,'add_sale')}</a>
       </div>
 
+      ${buildPeriodBar(period, '/inventory', from, to)}
+
       <!-- KPI Cards -->
       <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:1.25rem">
         <div class="stat-card">
@@ -150,6 +201,8 @@ inventory.get('/', async (c) => {
 
   // ── OWNER VIEW: full company stock batches ─────────────────
   const tab = new URL(c.req.url).searchParams.get('tab') ?? 'history';
+  const ownerDf = buildDateFilter(period, 'b.created_at', from, to);
+  const ownerDfTotals = buildDateFilter(period, 'created_at', from, to);
 
   // ---- Batch history ----
   const batches = await c.env.DB.prepare(`
@@ -157,15 +210,16 @@ inventory.get('/', async (c) => {
       (SELECT COUNT(*) FROM inventory_batch_lines WHERE batch_id=b.id) as line_count
     FROM inventory_batches b
     JOIN branches br ON br.id = b.branch_id
-    WHERE b.company_id=?
+    WHERE b.company_id=? ${ownerDf}
     ORDER BY b.created_at DESC`).bind(user.company_id).all<any>();
 
-  // ---- Grand totals from batches ----
+  // ---- Grand totals from batches (filtered) ----
   const totals = await c.env.DB.prepare(`
     SELECT COALESCE(SUM(total_gb),0) as gb,
            COALESCE(SUM(total_gross),0) as gross,
            COALESCE(SUM(total_net),0) as net
-    FROM inventory_batches WHERE company_id=?`).bind(user.company_id).first<any>();
+    FROM inventory_batches WHERE company_id=? ${ownerDfTotals}`)
+    .bind(user.company_id).first<any>();
 
   // ---- Build batch rows ----
   const batchRows = await Promise.all((batches.results || []).map(async (b: any, i: number) => {
@@ -229,6 +283,8 @@ inventory.get('/', async (c) => {
       </div>
       <a href="/inventory/add" class="btn btn-primary">+ Add Stock (Batch)</a>
     </div>
+
+    ${buildPeriodBar(period, '/inventory', from, to)}
 
     <!-- Summary Stats -->
     <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
