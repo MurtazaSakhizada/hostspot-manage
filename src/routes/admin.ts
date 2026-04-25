@@ -304,25 +304,42 @@ admin.get('/users', async (c) => {
   const lang = c.get('lang');
   if (user.role !== 'owner') return c.redirect('/dashboard');
 
-  const items = await c.env.DB.prepare(`
-    SELECT u.*,
-      (SELECT COUNT(*) FROM sales WHERE seller_id=u.id AND company_id=u.company_id) as sale_count
-    FROM users u WHERE u.company_id=? ORDER BY u.created_at DESC`).bind(user.company_id).all<any>();
+  const [items, branches] = await Promise.all([
+    c.env.DB.prepare(`
+      SELECT u.*, br.name as branch_name,
+        (SELECT COUNT(*) FROM sales WHERE seller_id=u.id AND company_id=u.company_id) as sale_count
+      FROM users u
+      LEFT JOIN branches br ON br.id = u.branch_id
+      WHERE u.company_id=? ORDER BY u.created_at DESC`).bind(user.company_id).all<any>(),
+    c.env.DB.prepare(`SELECT id, name FROM branches WHERE company_id=? AND active=1 ORDER BY name`)
+      .bind(user.company_id).all<any>(),
+  ]);
 
-  const rows = (items.results||[]).map((u: any) => `
+  const branchOpts = (branches.results||[]).map((b: any) =>
+    `<option value="${b.id}">${b.name}</option>`).join('');
+
+  const rows = (items.results||[]).map((u: any) => {
+    const branchBadge = u.role==='seller'
+      ? (u.branch_name
+          ? `<span class="badge badge-info" style="font-size:.72rem">🏢 ${u.branch_name}</span>`
+          : `<span style="color:var(--warning);font-size:.78rem">⚠️ بدون شعبه</span>`)
+      : '—';
+    return `
     <tr>
       <td><strong>${u.full_name}</strong></td>
       <td><code>${u.username}</code></td>
       <td><span class="badge badge-${u.role}">${t(lang, u.role==='owner'?'owner':'seller_role')}</span></td>
       <td>${u.role==='seller' ? `<span class="badge badge-warning">${Math.round(u.commission_rate*100)}%</span>` : '—'}</td>
+      <td>${branchBadge}</td>
       <td>${u.sale_count}</td>
       <td><span class="badge badge-${u.active?'success':'danger'}">${t(lang,u.active?'active':'inactive')}</span></td>
       <td>
         ${u.id !== user.id ? `
-        <button onclick="editUser(${u.id},'${u.full_name.replace(/'/g,"\\'")}','${u.username}','${u.role}',${u.commission_rate},'${u.language}',${u.active})" class="btn btn-outline btn-sm">${t(lang,'edit')}</button>
+        <button onclick="editUser(${u.id},'${u.full_name.replace(/'/g,"\\'")}','${u.username}','${u.role}',${u.commission_rate},'${u.language}',${u.active},${u.branch_id||0})" class="btn btn-outline btn-sm">${t(lang,'edit')}</button>
         <button onclick="confirmDelete('/api/users/${u.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>` : '<span class="text-gray text-xs">Current user</span>'}
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   return c.html(pageShell({
     title: t(lang,'users'), lang, user, activePage: 'users',
@@ -339,11 +356,12 @@ admin.get('/users', async (c) => {
             <th>${t(lang,'username')}</th>
             <th>${t(lang,'role')}</th>
             <th>${t(lang,'commission_rate')}</th>
+            <th>🏢 شعبه</th>
             <th>Sales</th>
             <th>${t(lang,'status')}</th>
             <th>${t(lang,'actions')}</th>
           </tr></thead>
-          <tbody>${rows||`<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">👥</div><h3>${t(lang,'no_data')}</h3></div></td></tr>`}</tbody>
+          <tbody>${rows||`<tr><td colspan="8"><div class="empty-state"><div class="empty-state-icon">👥</div><h3>${t(lang,'no_data')}</h3></div></td></tr>`}</tbody>
         </table>
       </div>
     </div>
@@ -383,6 +401,14 @@ admin.get('/users', async (c) => {
             <label>${t(lang,'commission_rate')} (0–100%)</label>
             <input type="number" name="commission_rate" min="0" max="100" step="0.5" value="15" placeholder="15"/>
             <div class="form-hint">Enter as percentage, e.g. 15 = 15%</div>
+          </div>
+          <div class="form-group" id="add-branch-wrap">
+            <label>🏢 شعبه اختصاصی فروشنده</label>
+            <select name="branch_id">
+              <option value="">— بدون محدودیت شعبه —</option>
+              ${branchOpts}
+            </select>
+            <div class="form-hint" style="color:var(--warning)">فروشنده فقط در این شعبه می‌تواند فروش، پرداخت و مصرف ثبت کند.</div>
           </div>
           <div class="form-group">
             <label>${t(lang,'language')}</label>
@@ -435,6 +461,14 @@ admin.get('/users', async (c) => {
               <input type="number" name="commission_rate" id="edit-comm" min="0" max="100" step="0.5"/>
             </div>
           </div>
+          <div class="form-group" id="edit-branch-wrap">
+            <label>🏢 شعبه اختصاصی فروشنده</label>
+            <select name="branch_id" id="edit-branch">
+              <option value="">— بدون محدودیت شعبه —</option>
+              ${branchOpts}
+            </select>
+            <div class="form-hint" style="color:var(--warning)">فروشنده فقط در این شعبه می‌تواند فروش، پرداخت و مصرف ثبت کند.</div>
+          </div>
           <div class="form-row">
             <div class="form-group">
               <label>${t(lang,'language')}</label>
@@ -462,16 +496,20 @@ admin.get('/users', async (c) => {
     scripts: `<script>
     function toggleCommission(prefix) {
       const role = document.getElementById(prefix+'-role').value;
-      const wrap = document.getElementById(prefix+'-comm-wrap');
-      if (wrap) wrap.style.display = role === 'seller' ? 'block' : 'none';
+      const commWrap = document.getElementById(prefix+'-comm-wrap');
+      const branchWrap = document.getElementById(prefix+'-branch-wrap');
+      if (commWrap)   commWrap.style.display   = role === 'seller' ? 'block' : 'none';
+      if (branchWrap) branchWrap.style.display = role === 'seller' ? 'block' : 'none';
     }
-    function editUser(id, name, uname, role, rate, lang, active) {
-      document.getElementById('edit-name').value = name;
-      document.getElementById('edit-uname').value = uname;
-      document.getElementById('edit-role').value = role;
-      document.getElementById('edit-comm').value = Math.round(rate * 100);
-      document.getElementById('edit-lang').value = lang;
+    function editUser(id, name, uname, role, rate, lang, active, branchId) {
+      document.getElementById('edit-name').value   = name;
+      document.getElementById('edit-uname').value  = uname;
+      document.getElementById('edit-role').value   = role;
+      document.getElementById('edit-comm').value   = Math.round(rate * 100);
+      document.getElementById('edit-lang').value   = lang;
       document.getElementById('edit-active').value = active ? '1' : '0';
+      const branchSel = document.getElementById('edit-branch');
+      if (branchSel) branchSel.value = branchId || '';
       document.getElementById('edit-form').action = '/users/'+id;
       toggleCommission('edit');
       document.getElementById('edit-modal').classList.add('open');
@@ -485,18 +523,20 @@ admin.post('/users', async (c) => {
   const user = c.get('user');
   if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
   const form = await c.req.formData();
-  const full_name = form.get('full_name')?.toString().trim() ?? '';
-  const username = form.get('username')?.toString().trim() ?? '';
-  const password = form.get('password')?.toString() ?? '';
-  const role = form.get('role')?.toString() ?? 'seller';
+  const full_name      = form.get('full_name')?.toString().trim() ?? '';
+  const username       = form.get('username')?.toString().trim() ?? '';
+  const password       = form.get('password')?.toString() ?? '';
+  const role           = form.get('role')?.toString() ?? 'seller';
   const commission_rate = parseFloat(form.get('commission_rate')?.toString() ?? '0') / 100;
-  const language = form.get('language')?.toString() ?? 'en';
+  const language       = form.get('language')?.toString() ?? 'en';
+  const branch_id_raw  = form.get('branch_id')?.toString() ?? '';
+  const branch_id      = branch_id_raw ? parseInt(branch_id_raw) : null;
 
   const hash = await hashPassword(password);
   try {
     await c.env.DB.prepare(`
-      INSERT INTO users (company_id, username, password_hash, full_name, role, commission_rate, language)
-      VALUES (?,?,?,?,?,?,?)`).bind(user.company_id, username, hash, full_name, role, commission_rate, language).run();
+      INSERT INTO users (company_id, username, password_hash, full_name, role, commission_rate, language, branch_id)
+      VALUES (?,?,?,?,?,?,?,?)`).bind(user.company_id, username, hash, full_name, role, commission_rate, language, branch_id).run();
   } catch (e: any) {
     return c.html(`Error: ${e.message}`, 400);
   }
@@ -508,23 +548,25 @@ admin.post('/users/:id', async (c) => {
   if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
   const id = c.req.param('id');
   const form = await c.req.formData();
-  const full_name = form.get('full_name')?.toString().trim() ?? '';
-  const username = form.get('username')?.toString().trim() ?? '';
-  const password = form.get('password')?.toString() ?? '';
-  const role = form.get('role')?.toString() ?? 'seller';
+  const full_name      = form.get('full_name')?.toString().trim() ?? '';
+  const username       = form.get('username')?.toString().trim() ?? '';
+  const password       = form.get('password')?.toString() ?? '';
+  const role           = form.get('role')?.toString() ?? 'seller';
   const commission_rate = parseFloat(form.get('commission_rate')?.toString() ?? '0') / 100;
-  const language = form.get('language')?.toString() ?? 'en';
-  const active = form.get('active')?.toString() === '1' ? 1 : 0;
+  const language       = form.get('language')?.toString() ?? 'en';
+  const active         = form.get('active')?.toString() === '1' ? 1 : 0;
+  const branch_id_raw  = form.get('branch_id')?.toString() ?? '';
+  const branch_id      = branch_id_raw ? parseInt(branch_id_raw) : null;
 
   if (password) {
     const hash = await hashPassword(password);
     await c.env.DB.prepare(`
-      UPDATE users SET full_name=?,username=?,password_hash=?,role=?,commission_rate=?,language=?,active=?
-      WHERE id=? AND company_id=?`).bind(full_name, username, hash, role, commission_rate, language, active, id, user.company_id).run();
+      UPDATE users SET full_name=?,username=?,password_hash=?,role=?,commission_rate=?,language=?,active=?,branch_id=?
+      WHERE id=? AND company_id=?`).bind(full_name, username, hash, role, commission_rate, language, active, branch_id, id, user.company_id).run();
   } else {
     await c.env.DB.prepare(`
-      UPDATE users SET full_name=?,username=?,role=?,commission_rate=?,language=?,active=?
-      WHERE id=? AND company_id=?`).bind(full_name, username, role, commission_rate, language, active, id, user.company_id).run();
+      UPDATE users SET full_name=?,username=?,role=?,commission_rate=?,language=?,active=?,branch_id=?
+      WHERE id=? AND company_id=?`).bind(full_name, username, role, commission_rate, language, active, branch_id, id, user.company_id).run();
   }
   return new Response(null, { status: 302, headers: { 'Location': '/users' } });
 });

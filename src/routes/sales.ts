@@ -207,7 +207,14 @@ sales.get('/:id/edit', async (c) => {
 
   if (!sale) return c.redirect('/sales');
 
-  const branches = await c.env.DB.prepare('SELECT * FROM branches WHERE company_id=? AND active=1').bind(user.company_id).all<any>();
+  // Lock seller to their assigned branch on edit form too
+  const editSellerBranchId = user.role === 'seller' ? (user.branch_id ?? null) : null;
+  const editBranchesResult = editSellerBranchId
+    ? await c.env.DB.prepare('SELECT * FROM branches WHERE company_id=? AND id=? AND active=1')
+        .bind(user.company_id, editSellerBranchId).all<any>()
+    : await c.env.DB.prepare('SELECT * FROM branches WHERE company_id=? AND active=1')
+        .bind(user.company_id).all<any>();
+
   const packages = await c.env.DB.prepare('SELECT * FROM packages WHERE company_id=? AND active=1').bind(user.company_id).all<any>();
 
   let sellers: any[] = [];
@@ -226,8 +233,21 @@ sales.get('/:id/edit', async (c) => {
        </div>`
     : `<input type="hidden" name="seller_id" value="${user.id}"/>`;
 
-  const branchOpts = (branches.results||[]).map((b: any) =>
+  const branchOpts = (editBranchesResult.results||[]).map((b: any) =>
     `<option value="${b.id}" ${b.id===sale.branch_id?'selected':''}>${b.name}</option>`).join('');
+  const editBranchField = editSellerBranchId
+    ? `<div class="form-group">
+        <label>${t(lang,'branch')}</label>
+        <div style="padding:.45rem .75rem;background:var(--bg-tertiary,var(--bg-secondary));border:1px solid var(--border);border-radius:8px;font-size:.9rem">
+          🏢 ${(editBranchesResult.results||[])[0]?.name ?? '—'}
+        </div>
+        <input type="hidden" name="branch_id" value="${editSellerBranchId}"/>
+        <div class="form-hint" style="color:var(--text-muted)">شعبه شما از پیش تعیین شده است.</div>
+       </div>`
+    : `<div class="form-group">
+        <label>${t(lang,'branch')}</label>
+        <select name="branch_id" required>${branchOpts}</select>
+       </div>`;
   const pkgOpts = (packages.results||[]).map((p: any) =>
     `<option value="${p.id}" data-gb="${p.size_gb}" data-price="${p.sale_price_per_gb}" ${p.id===sale.package_id?'selected':''}>${p.name} (${p.size_gb}GB)</option>`).join('');
 
@@ -242,10 +262,7 @@ sales.get('/:id/edit', async (c) => {
       <form method="POST" action="/sales/${id}/edit">
         ${sellerField}
         <div class="form-row">
-          <div class="form-group">
-            <label>${t(lang,'branch')}</label>
-            <select name="branch_id" required>${branchOpts}</select>
-          </div>
+          ${editBranchField}
           <div class="form-group">
             <label>${t(lang,'package')}</label>
             <select name="package_id" id="pkg-sel" required onchange="recalc()">${pkgOpts}</select>
@@ -359,7 +376,17 @@ sales.get('/add', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
 
-  const branches = await c.env.DB.prepare('SELECT * FROM branches WHERE company_id=? AND active=1').bind(user.company_id).all<any>();
+  // ── If seller has an assigned branch, restrict to that branch only ──
+  const sellerBranchId = user.role === 'seller' ? (user.branch_id ?? null) : null;
+
+  const branchQuery = sellerBranchId
+    ? `SELECT * FROM branches WHERE company_id=? AND id=? AND active=1`
+    : `SELECT * FROM branches WHERE company_id=? AND active=1`;
+
+  const branchesResult = sellerBranchId
+    ? await c.env.DB.prepare(branchQuery).bind(user.company_id, sellerBranchId).all<any>()
+    : await c.env.DB.prepare(branchQuery).bind(user.company_id).all<any>();
+
   const packages = await c.env.DB.prepare('SELECT * FROM packages WHERE company_id=? AND active=1').bind(user.company_id).all<any>();
 
   let sellers: any[] = [];
@@ -378,7 +405,22 @@ sales.get('/add', async (c) => {
        </div>`
     : `<input type="hidden" name="seller_id" value="${user.id}"/>`;
 
-  const branchOpts = (branches.results||[]).map((b: any) => `<option value="${b.id}">${b.name}</option>`).join('');
+  // Build branch options — if locked to one branch, show it as readonly text
+  const branchOpts = (branchesResult.results||[]).map((b: any) => `<option value="${b.id}">${b.name}</option>`).join('');
+  const branchField = sellerBranchId
+    ? `<div class="form-group">
+        <label>${t(lang,'branch')}</label>
+        <div style="padding:.45rem .75rem;background:var(--bg-tertiary,var(--bg-secondary));border:1px solid var(--border);border-radius:8px;font-size:.9rem">
+          🏢 ${(branchesResult.results||[])[0]?.name ?? '—'}
+        </div>
+        <input type="hidden" name="branch_id" value="${sellerBranchId}"/>
+        <div class="form-hint" style="color:var(--text-muted)">شعبه شما از پیش تعیین شده است.</div>
+       </div>`
+    : `<div class="form-group">
+        <label>${t(lang,'branch')}</label>
+        <select name="branch_id" required>${branchOpts}</select>
+       </div>`;
+
   const pkgOpts = (packages.results||[]).map((p: any) => `<option value="${p.id}" data-gb="${p.size_gb}" data-price="${p.sale_price_per_gb}">${p.name} (${p.size_gb}GB)</option>`).join('');
 
   return c.html(pageShell({
@@ -389,10 +431,7 @@ sales.get('/add', async (c) => {
       <form method="POST" action="/sales">
         ${sellerField}
         <div class="form-row">
-          <div class="form-group">
-            <label>${t(lang,'branch')}</label>
-            <select name="branch_id" required>${branchOpts}</select>
-          </div>
+          ${branchField}
           <div class="form-group">
             <label>${t(lang,'package')}</label>
             <select name="package_id" id="pkg-sel" required onchange="recalc()">${pkgOpts}</select>

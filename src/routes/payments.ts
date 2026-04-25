@@ -172,7 +172,32 @@ payments.get('/add', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
 
-  const branches = await c.env.DB.prepare('SELECT * FROM branches WHERE company_id=? AND active=1').bind(user.company_id).all<any>();
+  // If seller has an assigned branch, lock them to it
+  const sellerBranchId = user.role === 'seller' ? (user.branch_id ?? null) : null;
+
+  const branchesResult = sellerBranchId
+    ? await c.env.DB.prepare('SELECT * FROM branches WHERE company_id=? AND id=? AND active=1')
+        .bind(user.company_id, sellerBranchId).all<any>()
+    : await c.env.DB.prepare('SELECT * FROM branches WHERE company_id=? AND active=1')
+        .bind(user.company_id).all<any>();
+
+  // Build branch field: readonly for locked sellers, select for others
+  const branchField = sellerBranchId
+    ? `<div class="form-group">
+        <label>${t(lang,'branch')}</label>
+        <div style="padding:.45rem .75rem;background:var(--bg-tertiary,var(--bg-secondary));border:1px solid var(--border);border-radius:8px;font-size:.9rem">
+          🏢 ${(branchesResult.results||[])[0]?.name ?? '—'}
+        </div>
+        <input type="hidden" name="branch_id" value="${sellerBranchId}"/>
+        <div class="form-hint" style="color:var(--text-muted)">شعبه شما از پیش تعیین شده است.</div>
+       </div>`
+    : `<div class="form-group">
+        <label>${t(lang,'branch')} (${t(lang,'optional')})</label>
+        <select name="branch_id">
+          <option value="">—</option>
+          ${(branchesResult.results||[]).map((b: any) => `<option value="${b.id}">${b.name}</option>`).join('')}
+        </select>
+       </div>`;
 
   // Sellers register their own payment; owners pick a seller
   const sellerField = user.role === 'owner'
@@ -198,13 +223,7 @@ payments.get('/add', async (c) => {
       <form method="POST" action="/payments">
         ${sellerField}
         <div class="form-row">
-          <div class="form-group">
-            <label>${t(lang,'branch')} (${t(lang,'optional')})</label>
-            <select name="branch_id">
-              <option value="">—</option>
-              ${(branches.results||[]).map((b: any) => `<option value="${b.id}">${b.name}</option>`).join('')}
-            </select>
-          </div>
+          ${branchField}
           <div class="form-group">
             <label>${user.role==='seller'?'نوع پرداختی':t(lang,'payment_type')}</label>
             <select name="type" required>
