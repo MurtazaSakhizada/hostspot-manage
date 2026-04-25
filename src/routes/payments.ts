@@ -25,19 +25,25 @@ async function hasPendingRequest(db: D1Database, paymentId: number): Promise<boo
 payments.get('/', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
-  const sellerFilter = user.role === 'seller' ? `AND seller_id = ${user.id}` : '';
+  const sellerFilter = user.role === 'seller' ? `AND p.seller_id = ${user.id}` : '';
+  const branchId = user.role === 'owner' ? (c.req.query('branch') ?? '') : '';
+  const branchFilter = branchId ? `AND p.branch_id = ${parseInt(branchId)}` : '';
+
+  const allBranches = user.role === 'owner'
+    ? await c.env.DB.prepare('SELECT id, name FROM branches WHERE company_id=? AND active=1 ORDER BY name').bind(user.company_id).all<any>()
+    : { results: [] };
 
   const items = await c.env.DB.prepare(`
     SELECT p.*, u.full_name as seller_name, b.name as branch_name
     FROM payments p
     JOIN users u ON u.id = p.seller_id
     LEFT JOIN branches b ON b.id = p.branch_id
-    WHERE p.company_id=? ${sellerFilter}
+    WHERE p.company_id=? ${sellerFilter} ${branchFilter}
     ORDER BY p.payment_date DESC, p.created_at DESC`).bind(user.company_id).all<any>();
 
   const totals = await c.env.DB.prepare(`
     SELECT type, COALESCE(SUM(amount),0) as total
-    FROM payments WHERE company_id=? ${sellerFilter}
+    FROM payments p WHERE p.company_id=? ${sellerFilter} ${branchFilter}
     GROUP BY type`).bind(user.company_id).all<any>();
 
   const totalsByType: Record<string,number> = {};
@@ -121,13 +127,25 @@ payments.get('/', async (c) => {
     }).join('');
   }
 
+  // Branch filter bar (owner only)
+  const branchFilterBar = user.role === 'owner' && (allBranches.results||[]).length > 0 ? `
+    <form method="GET" action="/payments" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:1rem">
+      <label style="font-size:.85rem;color:var(--text-muted);white-space:nowrap">🏢 فیلتر شعبه:</label>
+      <select name="branch" onchange="this.form.submit()"
+        style="padding:.35rem .65rem;border:1px solid var(--border);border-radius:8px;font-size:.85rem;background:var(--bg-secondary);color:var(--text-primary);cursor:pointer">
+        <option value="" ${!branchId?'selected':''}>همه شعبه‌ها</option>
+        ${(allBranches.results||[]).map((b: any) => `<option value="${b.id}" ${branchId===String(b.id)?'selected':''}>${b.name}</option>`).join('')}
+      </select>
+      ${branchId ? `<a href="/payments" class="btn btn-sm btn-outline">✕ پاک‌کردن</a>` : ''}
+    </form>` : '';
+
   return c.html(pageShell({
     title: t(lang,'payments'), lang, user, activePage: 'payments',
     body: `
     <div class="page-header">
       <div>
         <div class="page-title">${user.role === 'seller' ? '💳 پرداختی‌های من' : '💰 ' + t(lang,'payments')}</div>
-        ${user.role === 'seller' ? `<div class="page-subtitle" style="font-size:.82rem;color:var(--text-muted)">${t(lang,'your_payments_to_owner')}</div>` : `<div class="page-subtitle" style="font-size:.82rem;color:var(--text-muted)">دریافتی‌های ثبت‌شده از فروشندگان</div>`}
+        ${user.role === 'seller' ? `<div class="page-subtitle" style="font-size:.82rem;color:var(--text-muted)">${t(lang,'your_payments_to_owner')}</div>` : `<div class="page-subtitle" style="font-size:.82rem;color:var(--text-muted)">دریافتی‌های ثبت‌شده از فروشندگان${branchId&&(allBranches.results||[]).find((b:any)=>String(b.id)===branchId)?' · 🏢 '+(allBranches.results||[]).find((b:any)=>String(b.id)===branchId).name:''}</div>`}
       </div>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap">
         ${user.role==='owner'
@@ -137,6 +155,7 @@ payments.get('/', async (c) => {
         }
       </div>
     </div>
+    ${branchFilterBar}
     <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
       ${Object.entries(totalsByType).map(([type, total]) => `
       <div class="stat-card">

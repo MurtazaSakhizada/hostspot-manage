@@ -26,20 +26,33 @@ function buildAllocDateFilter(period: string, col: string, from: string, to: str
   return '';
 }
 
-function buildAllocPeriodBar(period: string, from: string, to: string) {
+function buildAllocPeriodBar(period: string, from: string, to: string, branches: any[] = [], selectedBranch = '') {
   const periods = ['today','week','month','year','all'];
   const labels: Record<string,string> = {
     today:'امروز', week:'این هفته', month:'این ماه', year:'امسال', all:'همه وقت'
   };
   const btns = periods.map(p => {
     const active = period === p && !from && !to;
-    return `<a href="/allocations?period=${p}"
+    return `<a href="/allocations?period=${p}${selectedBranch?'&branch='+selectedBranch:''}"
         class="btn btn-sm ${active?'btn-primary':'btn-outline'}"
         style="white-space:nowrap">📅 ${labels[p]}</a>`;
   }).join('');
+
+  const branchSelect = branches.length > 0 ? `
+    <div style="display:flex;gap:.35rem;align-items:center;margin-right:.5rem">
+      <label style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">🏢 شعبه:</label>
+      <select name="branch" onchange="this.form.submit()"
+        style="padding:.3rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--bg-secondary);color:var(--text-primary);cursor:pointer">
+        <option value="" ${!selectedBranch?'selected':''}>همه شعبه‌ها</option>
+        ${branches.map(b => `<option value="${b.id}" ${selectedBranch===String(b.id)?'selected':''}>${b.name}</option>`).join('')}
+      </select>
+      ${selectedBranch ? `<a href="/allocations?period=${period}" class="btn btn-sm btn-outline" title="پاک‌کردن فیلتر شعبه">✕ شعبه</a>` : ''}
+    </div>` : '';
+
   return `
   <form method="GET" action="/allocations" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:1.25rem">
     ${btns}
+    ${branchSelect}
     <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-right:.5rem">
       <label style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">از تاریخ:</label>
       <input type="date" name="from" value="${from}"
@@ -48,7 +61,7 @@ function buildAllocPeriodBar(period: string, from: string, to: string) {
       <input type="date" name="to" value="${to}"
         style="padding:.3rem .5rem;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--bg-secondary);color:var(--text-primary)">
       <button type="submit" class="btn btn-sm btn-primary" style="white-space:nowrap">🔍 اعمال</button>
-      ${(from||to)?`<a href="/allocations?period=${period}" class="btn btn-sm btn-outline">✕ پاک‌کردن</a>`:''}
+      ${(from||to)?`<a href="/allocations?period=${period}${selectedBranch?'&branch='+selectedBranch:''}" class="btn btn-sm btn-outline">✕ تاریخ</a>`:''}
     </div>
   </form>`;
 }
@@ -62,6 +75,14 @@ allocations.get('/', async (c) => {
   const period = c.req.query('period') ?? 'all';
   const from   = c.req.query('from')   ?? '';
   const to     = c.req.query('to')     ?? '';
+  const branchId = user.role === 'owner' ? (c.req.query('branch') ?? '') : '';
+  const branchFilter = branchId ? `AND ab.branch_id = ${parseInt(branchId)}` : '';
+  const branchFilterTotals = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';
+
+  // Load all branches for filter UI (owner only)
+  const allBranches = user.role === 'owner'
+    ? await c.env.DB.prepare('SELECT id, name FROM branches WHERE company_id=? AND active=1 ORDER BY name').bind(user.company_id).all<any>()
+    : { results: [] };
 
   const sellerFilter = user.role === 'seller' ? `AND ab.seller_id = ${user.id}` : '';
   const dateFilter   = buildAllocDateFilter(period, 'ab.created_at', from, to);
@@ -73,7 +94,7 @@ allocations.get('/', async (c) => {
     FROM allocation_batches ab
     JOIN users u ON u.id = ab.seller_id
     JOIN branches br ON br.id = ab.branch_id
-    WHERE ab.company_id=? ${sellerFilter} ${dateFilter}
+    WHERE ab.company_id=? ${sellerFilter} ${dateFilter} ${branchFilter}
     ORDER BY ab.created_at DESC`).bind(user.company_id).all<any>();
 
   // ---- Grand totals (filtered) ----
@@ -84,7 +105,7 @@ allocations.get('/', async (c) => {
            COALESCE(SUM(total_gross),0) as gross,
            COALESCE(SUM(total_commission),0) as comm,
            COALESCE(SUM(total_net),0) as net
-    FROM allocation_batches WHERE company_id=? ${sfTotals} ${dfTotals}`)
+    FROM allocation_batches WHERE company_id=? ${sfTotals} ${dfTotals} ${branchFilterTotals}`)
     .bind(user.company_id).first<any>();
 
   // ---- Build batch details (load lines for each batch) ----
@@ -221,18 +242,22 @@ allocations.get('/', async (c) => {
       </td></tr>`;
   }
 
+  const selectedBranchName = branchId
+    ? (allBranches.results||[]).find((b: any) => String(b.id) === branchId)?.name ?? ''
+    : '';
+
   return c.html(pageShell({
     title: t(lang,'allocations'), lang, user, activePage: 'allocations',
     body: `
     <div class="page-header">
       <div>
         <div class="page-title">🔀 ${t(lang,'allocations')}</div>
-        <div class="page-subtitle">Stock allocation history to sellers</div>
+        <div class="page-subtitle">تاریخچه تخصیص به فروشندگان${selectedBranchName ? ' · 🏢 ' + selectedBranchName : ''}</div>
       </div>
-      ${user.role==='owner'?`<a href="/allocations/add" class="btn btn-primary">+ Allocate to Seller</a>`:''}
+      ${user.role==='owner'?`<a href="/allocations/add" class="btn btn-primary">+ تخصیص جدید</a>`:''}
     </div>
 
-    ${buildAllocPeriodBar(period, from, to)}
+    ${buildAllocPeriodBar(period, from, to, allBranches.results||[], branchId)}
 
     <!-- Summary Stats -->
     <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">

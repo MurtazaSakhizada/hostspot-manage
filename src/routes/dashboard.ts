@@ -47,13 +47,15 @@ function getPeriodLabel(p: string, from = '', to = '') {
   return p==='today'?'امروز':p==='week'?'این هفته':p==='month'?'این ماه':p==='year'?'امسال':'همه وقت';
 }
 
-/** Renders period quick-buttons + from/to date inputs */
+/** Renders period quick-buttons + from/to date inputs + optional branch selector */
 function renderPeriodBar(
   current: string,
   base   = '/dashboard',
   from   = '',
   to     = '',
-  extra  = ''          // extra query params to keep, e.g. '&mode=financial'
+  extra  = '',          // extra query params to keep, e.g. '&mode=financial'
+  branches: any[] = [], // list of {id, name} for branch filter
+  selectedBranch = ''   // currently selected branch id
 ) {
   const periods = ['today','week','month','year','all'];
   const labels: Record<string,string> = {
@@ -61,10 +63,21 @@ function renderPeriodBar(
   };
   const btns = periods.map(p => {
     const active = current === p && !from && !to;
-    return `<a href="${base}?period=${p}${extra}"
+    return `<a href="${base}?period=${p}${extra}${selectedBranch?'&branch='+selectedBranch:''}"
         class="btn btn-sm ${active?'btn-primary':'btn-outline'}"
         style="white-space:nowrap">📅 ${labels[p]}</a>`;
   }).join('');
+
+  const branchSelect = branches.length > 0 ? `
+    <div style="display:flex;gap:.35rem;align-items:center;margin-right:.5rem">
+      <label style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">🏢 شعبه:</label>
+      <select name="branch" onchange="this.form.submit()"
+        style="padding:.3rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--bg-secondary);color:var(--text-primary);cursor:pointer">
+        <option value="" ${!selectedBranch?'selected':''}>همه شعبه‌ها</option>
+        ${branches.map(b => `<option value="${b.id}" ${selectedBranch===String(b.id)?'selected':''}>${b.name}</option>`).join('')}
+      </select>
+      ${selectedBranch ? `<a href="${base}?period=${current}${extra}" class="btn btn-sm btn-outline" style="white-space:nowrap" title="پاک‌کردن فیلتر شعبه">✕ شعبه</a>` : ''}
+    </div>` : '';
 
   return `
   <form method="GET" action="${base}" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:1.25rem">
@@ -73,6 +86,7 @@ function renderPeriodBar(
       return `<input type="hidden" name="${k}" value="${v||''}">`;
     }).join('') : ''}
     ${btns}
+    ${branchSelect}
     <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-right:.5rem">
       <label style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">از تاریخ:</label>
       <input type="date" name="from" value="${from}"
@@ -81,7 +95,7 @@ function renderPeriodBar(
       <input type="date" name="to" value="${to}"
         style="padding:.3rem .5rem;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--bg-secondary);color:var(--text-primary)">
       <button type="submit" class="btn btn-sm btn-primary" style="white-space:nowrap">🔍 اعمال</button>
-      ${(from||to)?`<a href="${base}?period=${current}${extra}" class="btn btn-sm btn-outline" style="white-space:nowrap">✕ پاک‌کردن</a>`:''}
+      ${(from||to)?`<a href="${base}?period=${current}${selectedBranch?'&branch='+selectedBranch:''}${extra}" class="btn btn-sm btn-outline" style="white-space:nowrap">✕ تاریخ</a>`:''}
     </div>
   </form>`;
 }
@@ -93,7 +107,8 @@ function renderPeriodBtns(current: string, base = '/dashboard') {
 
 async function ownerDashboard(
   db: D1Database, user: SessionUser, lang: Lang,
-  period: string, dateFrom = '', dateTo = ''
+  period: string, dateFrom = '', dateTo = '',
+  branchId = ''
 ): Promise<string> {
 
   const pf  = getPeriodFilter(period, 'snapshot_time', dateFrom, dateTo);
@@ -101,45 +116,57 @@ async function ownerDashboard(
   const pfE = getPeriodFilter(period, 'expense_date',  dateFrom, dateTo);
   const pl  = getPeriodLabel(period, dateFrom, dateTo);
 
+  // Branch SQL condition
+  const bfS  = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';   // for sales
+  const bfP  = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';   // for payments
+  const bfAb = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';   // for allocation_batches
+
   // ── Company purchase price ───────────────────────────────
   const company = await db.prepare('SELECT name, settings FROM companies WHERE id=?')
     .bind(user.company_id).first<any>();
   const settings = JSON.parse(company?.settings || '{}');
   const purchasePricePerGb: number = settings.purchase_price_per_gb ?? 0;
 
-  // ── Sales totals (period-filtered) ───────────────────────
+  // ── All branches list (for selector UI) ────────────────────
+  const allBranches = await db.prepare('SELECT id, name FROM branches WHERE company_id=? AND active=1 ORDER BY name')
+    .bind(user.company_id).all<any>();
+  const selectedBranchName = branchId
+    ? (allBranches.results||[]).find((b: any) => String(b.id) === branchId)?.name ?? ''
+    : '';
+
+  // ── Sales totals (period + branch filtered) ───────────────
   const sls = await db.prepare(`
     SELECT COALESCE(SUM(total_gb),0) as gb,
            COALESCE(SUM(gross_amount),0) as gross,
            COALESCE(SUM(commission_amount),0) as comm,
            COALESCE(SUM(net_amount),0) as net,
            COUNT(*) as cnt
-    FROM sales WHERE company_id=? ${pf}`).bind(user.company_id).first<any>();
+    FROM sales WHERE company_id=? ${pf} ${bfS}`).bind(user.company_id).first<any>();
 
-  // ── Inventory totals ─────────────────────────────────────
+  // ── Inventory totals (not branch-filtered — inventory is company-wide) ──
   const invBatch = await db.prepare(`
     SELECT COALESCE(SUM(total_gb),0) as gb,
            COALESCE(SUM(total_gross),0) as gross,
            COALESCE(SUM(purchase_cost),0) as purchase_cost
     FROM inventory_batches WHERE company_id=?`).bind(user.company_id).first<any>();
 
-  // ── Allocations — use allocation_batches (source of truth, NOT old allocations table)
+  // ── Allocations (branch filtered) ─────────────────────────
   const alloc = await db.prepare(`
     SELECT COALESCE(SUM(total_gb),0)         as gb,
            COALESCE(SUM(total_gross),0)      as gross,
            COALESCE(SUM(total_commission),0) as commission,
            COALESCE(SUM(total_net),0)        as net
-    FROM allocation_batches WHERE company_id=?`).bind(user.company_id).first<any>();
+    FROM allocation_batches WHERE company_id=? ${bfAb}`).bind(user.company_id).first<any>();
 
-  // ── Expenses (COMPANY ONLY, period-filtered) ───────────────
+  // ── Expenses (COMPANY ONLY, period-filtered, NOT branch-filtered) ─────────
   const expTotal = await db.prepare(`
     SELECT COALESCE(SUM(amount),0) as total FROM expenses
     WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0) ${pfE}`)
     .bind(user.company_id).first<{total:number}>();
 
-  // ── Payments (received FROM sellers, period-filtered) ─────
+  // ── Payments (received FROM sellers, period + branch filtered) ────────────
   const payTotal = await db.prepare(`
-    SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE company_id=? ${pfP}`)
+    SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE company_id=? ${pfP} ${bfP}`)
     .bind(user.company_id).first<{total:number}>();
 
   // ── Formula calculations ──────────────────────────────────
@@ -163,7 +190,7 @@ async function ownerDashboard(
   // Stock GB remaining
   const stockGb = (invBatch?.gb ?? 0) - soldGb;
 
-  // ── Branch drill-down ────────────────────────────────────
+  // ── Branch drill-down (all branches summary) ──────────────
   const branches = await db.prepare(`
     SELECT b.id, b.name,
       COALESCE(SUM(s.total_gb),0) as sold_gb,
@@ -176,7 +203,8 @@ async function ownerDashboard(
     WHERE b.company_id=?
     GROUP BY b.id, b.name ORDER BY sold_gb DESC`).bind(user.company_id).all<any>();
 
-  // ── Per seller (includes allocation value for debt calculation) ──────────
+  // ── Per seller (branch-filtered) ──────────────────────────
+  const sellerBranchJoin = branchId ? `AND s.branch_id = ${parseInt(branchId)}` : '';
   const sellers = await db.prepare(`
     SELECT u.id, u.full_name, u.commission_rate,
       COALESCE(SUM(s.total_gb),0) as sold_gb,
@@ -184,10 +212,10 @@ async function ownerDashboard(
       COALESCE(SUM(s.commission_amount),0) as comm,
       COALESCE(SUM(s.net_amount),0) as net,
       COUNT(s.id) as tx_count,
-      COALESCE((SELECT SUM(amount) FROM payments p WHERE p.seller_id=u.id AND p.company_id=u.company_id),0) as paid,
-      COALESCE((SELECT SUM(total_gross) FROM allocation_batches ab WHERE ab.seller_id=u.id AND ab.company_id=u.company_id),0) as alloc_value
+      COALESCE((SELECT SUM(amount) FROM payments p WHERE p.seller_id=u.id AND p.company_id=u.company_id ${bfP}),0) as paid,
+      COALESCE((SELECT SUM(total_gross) FROM allocation_batches ab WHERE ab.seller_id=u.id AND ab.company_id=u.company_id ${bfAb}),0) as alloc_value
     FROM users u
-    LEFT JOIN sales s ON s.seller_id=u.id AND s.company_id=u.company_id
+    LEFT JOIN sales s ON s.seller_id=u.id AND s.company_id=u.company_id ${sellerBranchJoin}
     WHERE u.company_id=? AND u.role='seller' AND u.active=1
     GROUP BY u.id, u.full_name, u.commission_rate ORDER BY sold_gb DESC`)
     .bind(user.company_id).all<any>();
@@ -232,7 +260,7 @@ async function ownerDashboard(
   <div class="page-header">
     <div>
       <div class="page-title">📊 ${t(lang,'dashboard')}</div>
-      <div class="page-subtitle">${company?.name ?? ''} · ${pl}</div>
+      <div class="page-subtitle">${company?.name ?? ''} · ${pl}${selectedBranchName ? ' · 🏢 ' + selectedBranchName : ''}</div>
     </div>
     <div class="btn-group">
       <a href="/reports" class="btn btn-outline btn-sm">📋 ${t(lang,'reports')}</a>
@@ -240,7 +268,7 @@ async function ownerDashboard(
     </div>
   </div>
 
-  ${renderPeriodBar(period, '/dashboard', dateFrom, dateTo)}
+  ${renderPeriodBar(period, '/dashboard', dateFrom, dateTo, '', allBranches.results||[], branchId)}
 
   <!-- PRIMARY KPIs — 6 cards -->
   <div class="stats-grid" style="margin-bottom:1.25rem">
@@ -1133,12 +1161,17 @@ async function sellerDashboard(
 // ============================================================
 async function investorDashboard(
   db: D1Database, user: SessionUser, lang: Lang,
-  period: string, dateFrom = '', dateTo = ''
+  period: string, dateFrom = '', dateTo = '',
+  branchId = ''
 ): Promise<string> {
 
   const pfA = getPeriodFilter(period, 'created_at',   dateFrom, dateTo);
   const pfP = getPeriodFilter(period, 'payment_date', dateFrom, dateTo);
   const pl  = getPeriodLabel(period, dateFrom, dateTo);
+
+  // Branch SQL condition
+  const bfAb = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';
+  const bfP  = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';
 
   // ── Company settings (purchase price per GB) ─────────────
   const company = await db.prepare('SELECT name, settings FROM companies WHERE id=?')
@@ -1146,14 +1179,21 @@ async function investorDashboard(
   const settings = JSON.parse(company?.settings || '{}');
   const purchasePricePerGb: number = settings.purchase_price_per_gb ?? 0;
 
-  // ── Company-wide totals from allocation_batches (period-filtered) ─────
+  // ── All branches list (for selector UI) ────────────────────
+  const allBranches = await db.prepare('SELECT id, name FROM branches WHERE company_id=? AND active=1 ORDER BY name')
+    .bind(user.company_id).all<any>();
+  const selectedBranchName = branchId
+    ? (allBranches.results||[]).find((b: any) => String(b.id) === branchId)?.name ?? ''
+    : '';
+
+  // ── Company-wide totals from allocation_batches (period + branch filtered) ──
   const allocTotals = await db.prepare(`
     SELECT
       COALESCE(SUM(total_gb),0)         as total_gb,
       COALESCE(SUM(total_gross),0)      as total_gross,
       COALESCE(SUM(total_commission),0) as total_commission,
       COALESCE(SUM(total_net),0)        as total_net
-    FROM allocation_batches WHERE company_id=? ${pfA}
+    FROM allocation_batches WHERE company_id=? ${pfA} ${bfAb}
   `).bind(user.company_id).first<any>();
 
   const totalGb         = allocTotals?.total_gb         ?? 0;
@@ -1167,17 +1207,17 @@ async function investorDashboard(
   // ── Owner's net profit = Gross − Commission − Purchase Cost ──────────
   const ownerNetProfit = totalGross - totalCommission - totalPurchaseCost;
 
-  // ── Total payments received from sellers (period-filtered) ─────────────────
+  // ── Total payments received from sellers (period + branch filtered) ──────
   const payRow = await db.prepare(`
     SELECT COALESCE(SUM(amount),0) as total_paid
-    FROM payments WHERE company_id=? ${pfP}
+    FROM payments WHERE company_id=? ${pfP} ${bfP}
   `).bind(user.company_id).first<{total_paid:number}>();
   const totalPaid = payRow?.total_paid ?? 0;
 
   // ── Remaining balance sellers still owe ──────────────────
   const totalRemaining = totalNet - totalPaid;
 
-  // ── Company expenses ─────────────────────────────────────
+  // ── Company expenses (not branch-filtered) ────────────────
   const expRow = await db.prepare(`
     SELECT COALESCE(SUM(amount),0) as total FROM expenses
     WHERE company_id=? AND (seller_id IS NULL OR seller_id = 0)
@@ -1187,7 +1227,7 @@ async function investorDashboard(
   // ── Available capital = paid − purchase_cost − expenses ──
   const availableCapital = totalPaid - totalPurchaseCost - totalExpenses;
 
-  // ── Per-seller breakdown (joined from allocation_batches + payments) ──
+  // ── Per-seller breakdown (branch-filtered) ────────────────
   const sellerStats = await db.prepare(`
     SELECT
       u.id as seller_id,
@@ -1205,12 +1245,12 @@ async function investorDashboard(
         SUM(total_gross)      as total_gross,
         SUM(total_commission) as total_commission,
         SUM(total_net)        as total_net
-      FROM allocation_batches WHERE company_id=?
+      FROM allocation_batches WHERE company_id=? ${bfAb}
       GROUP BY seller_id
     ) ab ON ab.seller_id = u.id
     LEFT JOIN (
       SELECT seller_id, SUM(amount) as total_paid
-      FROM payments WHERE company_id=?
+      FROM payments WHERE company_id=? ${bfP}
       GROUP BY seller_id
     ) p ON p.seller_id = u.id
     WHERE u.company_id=? AND u.role='seller' AND u.active=1
@@ -1218,38 +1258,39 @@ async function investorDashboard(
     ORDER BY ab.total_gb DESC
   `).bind(user.company_id, user.company_id, user.company_id).all<any>();
 
-  // ── Recent allocations (last 10) ──────────────────────────
+  // ── Recent allocations (last 10, branch-filtered) ─────────
   const recentAllocs = await db.prepare(`
     SELECT ab.id, ab.created_at, ab.total_gb, ab.total_gross, ab.total_commission, ab.total_net,
            u.full_name as seller_name, br.name as branch_name
     FROM allocation_batches ab
     JOIN users u ON u.id = ab.seller_id
     JOIN branches br ON br.id = ab.branch_id
-    WHERE ab.company_id=?
+    WHERE ab.company_id=? ${bfAb}
     ORDER BY ab.created_at DESC LIMIT 10
   `).bind(user.company_id).all<any>();
 
-  // ── Recent payments (last 10) ─────────────────────────────
+  // ── Recent payments (last 10, branch-filtered) ────────────
   const recentPayments = await db.prepare(`
     SELECT p.id, p.payment_date, p.amount, p.type, p.notes,
-           u.full_name as seller_name
+           u.full_name as seller_name, b.name as branch_name
     FROM payments p
     JOIN users u ON u.id = p.seller_id
-    WHERE p.company_id=?
+    LEFT JOIN branches b ON b.id = p.branch_id
+    WHERE p.company_id=? ${bfP}
     ORDER BY p.payment_date DESC, p.created_at DESC LIMIT 10
   `).bind(user.company_id).all<any>();
 
-  // ── 7-day daily payments chart ────────────────────────────
+  // ── 7-day daily payments chart (branch-filtered) ──────────
   const chart7Pay = await db.prepare(`
     SELECT date(payment_date) as day,
            COALESCE(SUM(amount),0) as total,
            COUNT(*) as cnt
-    FROM payments WHERE company_id=?
+    FROM payments WHERE company_id=? ${bfP}
       AND payment_date >= date('now','-6 days')
     GROUP BY day ORDER BY day ASC
   `).bind(user.company_id).all<any>();
 
-  // ── 6-month monthly trend (allocations + payments) ────────
+  // ── 6-month monthly trend (allocations + payments, branch-filtered) ──
   const monthly6 = await db.prepare(`
     SELECT
       strftime('%Y-%m', ab.created_at) as month,
@@ -1258,14 +1299,14 @@ async function investorDashboard(
       COALESCE(SUM(ab.total_commission),0) as alloc_comm,
       COALESCE(SUM(ab.total_net),0)        as alloc_net
     FROM allocation_batches ab
-    WHERE ab.company_id=?
+    WHERE ab.company_id=? ${bfAb}
     GROUP BY month ORDER BY month DESC LIMIT 6
   `).bind(user.company_id).all<any>();
 
   const monthly6Pay = await db.prepare(`
     SELECT strftime('%Y-%m', payment_date) as month,
            COALESCE(SUM(amount),0) as paid
-    FROM payments WHERE company_id=?
+    FROM payments WHERE company_id=? ${bfP}
     GROUP BY month ORDER BY month DESC LIMIT 6
   `).bind(user.company_id).all<any>();
 
@@ -1338,7 +1379,7 @@ async function investorDashboard(
   <div class="page-header">
     <div>
       <div class="page-title">💼 داشبورد مالی</div>
-      <div class="page-subtitle">${company?.name ?? ''} · ${pl}</div>
+      <div class="page-subtitle">${company?.name ?? ''} · ${pl}${selectedBranchName ? ' · 🏢 ' + selectedBranchName : ''}</div>
     </div>
     <div class="btn-group">
       <a href="/dashboard?mode=owner" class="btn btn-outline btn-sm">📊 حالت مالک</a>
@@ -1347,7 +1388,7 @@ async function investorDashboard(
     </div>
   </div>
 
-  ${renderPeriodBar(period, '/dashboard', dateFrom, dateTo, '&mode=financial')}
+  ${renderPeriodBar(period, '/dashboard', dateFrom, dateTo, '&mode=financial', allBranches.results||[], branchId)}
 
   <!-- 6 KPI CARDS -->
   <div class="stats-grid" style="margin-bottom:1.25rem">
@@ -1578,6 +1619,7 @@ dashboard.get('/', async (c) => {
   const mode     = c.req.query('mode')   ?? '';
   const dateFrom = c.req.query('from')   ?? '';
   const dateTo   = c.req.query('to')     ?? '';
+  const branchId = c.req.query('branch') ?? '';
 
   let bodyHtml: string;
   if (user.role === 'owner') {
@@ -1588,9 +1630,9 @@ dashboard.get('/', async (c) => {
     const dashMode = mode || settings.dashboard_mode || 'owner';
 
     if (dashMode === 'financial') {
-      bodyHtml = await investorDashboard(c.env.DB, user, lang, period, dateFrom, dateTo);
+      bodyHtml = await investorDashboard(c.env.DB, user, lang, period, dateFrom, dateTo, branchId);
     } else {
-      bodyHtml = await ownerDashboard(c.env.DB, user, lang, period, dateFrom, dateTo);
+      bodyHtml = await ownerDashboard(c.env.DB, user, lang, period, dateFrom, dateTo, branchId);
     }
   } else {
     bodyHtml = await sellerDashboard(c.env.DB, user, lang, period, dateFrom, dateTo);
