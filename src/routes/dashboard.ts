@@ -116,10 +116,14 @@ async function ownerDashboard(
   const pfE = getPeriodFilter(period, 'expense_date',  dateFrom, dateTo);
   const pl  = getPeriodLabel(period, dateFrom, dateTo);
 
-  // Branch SQL condition
-  const bfS  = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';   // for sales
-  const bfP  = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';   // for payments
-  const bfAb = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';   // for allocation_batches
+  // Branch SQL condition (با alias صحیح برای هر جدول)
+  const bfS  = branchId ? `AND s.branch_id = ${parseInt(branchId)}` : '';    // برای sales با alias s
+  const bfP  = branchId ? `AND p.branch_id = ${parseInt(branchId)}` : '';    // برای payments با alias p
+  const bfAb = branchId ? `AND ab.branch_id = ${parseInt(branchId)}` : '';   // برای allocation_batches با alias ab
+  // بدون alias (برای WHERE مستقیم روی جدول)
+  const bfSRaw  = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';
+  const bfPRaw  = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';
+  const bfAbRaw = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';
 
   // ── Company purchase price ───────────────────────────────
   const company = await db.prepare('SELECT name, settings FROM companies WHERE id=?')
@@ -141,7 +145,7 @@ async function ownerDashboard(
            COALESCE(SUM(commission_amount),0) as comm,
            COALESCE(SUM(net_amount),0) as net,
            COUNT(*) as cnt
-    FROM sales WHERE company_id=? ${pf} ${bfS}`).bind(user.company_id).first<any>();
+    FROM sales WHERE company_id=? ${pf} ${bfSRaw}`).bind(user.company_id).first<any>();
 
   // ── Inventory totals (not branch-filtered — inventory is company-wide) ──
   const invBatch = await db.prepare(`
@@ -156,7 +160,7 @@ async function ownerDashboard(
            COALESCE(SUM(total_gross),0)      as gross,
            COALESCE(SUM(total_commission),0) as commission,
            COALESCE(SUM(total_net),0)        as net
-    FROM allocation_batches WHERE company_id=? ${bfAb}`).bind(user.company_id).first<any>();
+    FROM allocation_batches WHERE company_id=? ${bfAbRaw}`).bind(user.company_id).first<any>();
 
   // ── Expenses (COMPANY ONLY, period-filtered, NOT branch-filtered) ─────────
   const expTotal = await db.prepare(`
@@ -166,7 +170,7 @@ async function ownerDashboard(
 
   // ── Payments (received FROM sellers, period + branch filtered) ────────────
   const payTotal = await db.prepare(`
-    SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE company_id=? ${pfP} ${bfP}`)
+    SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE company_id=? ${pfP} ${bfPRaw}`)
     .bind(user.company_id).first<{total:number}>();
 
   // ── Formula calculations ──────────────────────────────────
@@ -204,7 +208,8 @@ async function ownerDashboard(
     GROUP BY b.id, b.name ORDER BY sold_gb DESC`).bind(user.company_id).all<any>();
 
   // ── Per seller (branch-filtered) ──────────────────────────
-  const sellerBranchJoin = branchId ? `AND s.branch_id = ${parseInt(branchId)}` : '';
+  // شرط branch باید داخل ON باشد نه بعد از آن
+  const sellerBranchOnCond = branchId ? `AND s.branch_id = ${parseInt(branchId)}` : '';
   const sellers = await db.prepare(`
     SELECT u.id, u.full_name, u.commission_rate,
       COALESCE(SUM(s.total_gb),0) as sold_gb,
@@ -212,10 +217,10 @@ async function ownerDashboard(
       COALESCE(SUM(s.commission_amount),0) as comm,
       COALESCE(SUM(s.net_amount),0) as net,
       COUNT(s.id) as tx_count,
-      COALESCE((SELECT SUM(amount) FROM payments p WHERE p.seller_id=u.id AND p.company_id=u.company_id ${bfP}),0) as paid,
-      COALESCE((SELECT SUM(total_gross) FROM allocation_batches ab WHERE ab.seller_id=u.id AND ab.company_id=u.company_id ${bfAb}),0) as alloc_value
+      COALESCE((SELECT SUM(amount) FROM payments p2 WHERE p2.seller_id=u.id AND p2.company_id=u.company_id ${bfPRaw}),0) as paid,
+      COALESCE((SELECT SUM(total_gross) FROM allocation_batches ab2 WHERE ab2.seller_id=u.id AND ab2.company_id=u.company_id ${bfAbRaw}),0) as alloc_value
     FROM users u
-    LEFT JOIN sales s ON s.seller_id=u.id AND s.company_id=u.company_id ${sellerBranchJoin}
+    LEFT JOIN sales s ON s.seller_id=u.id AND s.company_id=u.company_id ${sellerBranchOnCond}
     WHERE u.company_id=? AND u.role='seller' AND u.active=1
     GROUP BY u.id, u.full_name, u.commission_rate ORDER BY sold_gb DESC`)
     .bind(user.company_id).all<any>();
@@ -1169,9 +1174,12 @@ async function investorDashboard(
   const pfP = getPeriodFilter(period, 'payment_date', dateFrom, dateTo);
   const pl  = getPeriodLabel(period, dateFrom, dateTo);
 
-  // Branch SQL condition
-  const bfAb = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';
-  const bfP  = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';
+  // Branch SQL condition — همیشه بدون alias (برای WHERE مستقیم)
+  const bfAbRaw = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';
+  const bfPRaw  = branchId ? `AND branch_id = ${parseInt(branchId)}` : '';
+  // با alias برای جایی که جدول alias دارد
+  const bfAbAlias = branchId ? `AND ab.branch_id = ${parseInt(branchId)}` : '';
+  const bfPAlias  = branchId ? `AND p.branch_id = ${parseInt(branchId)}` : '';
 
   // ── Company settings (purchase price per GB) ─────────────
   const company = await db.prepare('SELECT name, settings FROM companies WHERE id=?')
@@ -1193,7 +1201,7 @@ async function investorDashboard(
       COALESCE(SUM(total_gross),0)      as total_gross,
       COALESCE(SUM(total_commission),0) as total_commission,
       COALESCE(SUM(total_net),0)        as total_net
-    FROM allocation_batches WHERE company_id=? ${pfA} ${bfAb}
+    FROM allocation_batches WHERE company_id=? ${pfA} ${bfAbRaw}
   `).bind(user.company_id).first<any>();
 
   const totalGb         = allocTotals?.total_gb         ?? 0;
@@ -1210,7 +1218,7 @@ async function investorDashboard(
   // ── Total payments received from sellers (period + branch filtered) ──────
   const payRow = await db.prepare(`
     SELECT COALESCE(SUM(amount),0) as total_paid
-    FROM payments WHERE company_id=? ${pfP} ${bfP}
+    FROM payments WHERE company_id=? ${pfP} ${bfPRaw}
   `).bind(user.company_id).first<{total_paid:number}>();
   const totalPaid = payRow?.total_paid ?? 0;
 
@@ -1245,12 +1253,12 @@ async function investorDashboard(
         SUM(total_gross)      as total_gross,
         SUM(total_commission) as total_commission,
         SUM(total_net)        as total_net
-      FROM allocation_batches WHERE company_id=? ${bfAb}
+      FROM allocation_batches WHERE company_id=? ${bfAbRaw}
       GROUP BY seller_id
     ) ab ON ab.seller_id = u.id
     LEFT JOIN (
       SELECT seller_id, SUM(amount) as total_paid
-      FROM payments WHERE company_id=? ${bfP}
+      FROM payments WHERE company_id=? ${bfPRaw}
       GROUP BY seller_id
     ) p ON p.seller_id = u.id
     WHERE u.company_id=? AND u.role='seller' AND u.active=1
@@ -1265,7 +1273,7 @@ async function investorDashboard(
     FROM allocation_batches ab
     JOIN users u ON u.id = ab.seller_id
     JOIN branches br ON br.id = ab.branch_id
-    WHERE ab.company_id=? ${bfAb}
+    WHERE ab.company_id=? ${bfAbAlias}
     ORDER BY ab.created_at DESC LIMIT 10
   `).bind(user.company_id).all<any>();
 
@@ -1276,7 +1284,7 @@ async function investorDashboard(
     FROM payments p
     JOIN users u ON u.id = p.seller_id
     LEFT JOIN branches b ON b.id = p.branch_id
-    WHERE p.company_id=? ${bfP}
+    WHERE p.company_id=? ${bfPAlias}
     ORDER BY p.payment_date DESC, p.created_at DESC LIMIT 10
   `).bind(user.company_id).all<any>();
 
@@ -1285,7 +1293,7 @@ async function investorDashboard(
     SELECT date(payment_date) as day,
            COALESCE(SUM(amount),0) as total,
            COUNT(*) as cnt
-    FROM payments WHERE company_id=? ${bfP}
+    FROM payments WHERE company_id=? ${bfPRaw}
       AND payment_date >= date('now','-6 days')
     GROUP BY day ORDER BY day ASC
   `).bind(user.company_id).all<any>();
@@ -1299,14 +1307,14 @@ async function investorDashboard(
       COALESCE(SUM(ab.total_commission),0) as alloc_comm,
       COALESCE(SUM(ab.total_net),0)        as alloc_net
     FROM allocation_batches ab
-    WHERE ab.company_id=? ${bfAb}
+    WHERE ab.company_id=? ${bfAbAlias}
     GROUP BY month ORDER BY month DESC LIMIT 6
   `).bind(user.company_id).all<any>();
 
   const monthly6Pay = await db.prepare(`
     SELECT strftime('%Y-%m', payment_date) as month,
            COALESCE(SUM(amount),0) as paid
-    FROM payments WHERE company_id=? ${bfP}
+    FROM payments WHERE company_id=? ${bfPRaw}
     GROUP BY month ORDER BY month DESC LIMIT 6
   `).bind(user.company_id).all<any>();
 
