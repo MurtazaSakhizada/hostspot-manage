@@ -155,11 +155,9 @@ admin.get('/packages', async (c) => {
     <tr>
       <td><strong>${p.name}</strong></td>
       <td class="text-primary font-bold">${p.size_gb} GB</td>
-      <td>${formatMoney(p.sale_price_per_gb)}/GB</td>
-      <td class="text-success font-bold">${formatMoney(p.size_gb * p.sale_price_per_gb)}</td>
       <td><span class="badge badge-${p.active?'success':'danger'}">${t(lang, p.active?'active':'inactive')}</span></td>
       <td>
-        <button onclick="editPkg(${p.id},'${p.name.replace(/'/g,"\\'")}',${p.size_gb},${p.sale_price_per_gb},${p.active})" class="btn btn-outline btn-sm">${t(lang,'edit')}</button>
+        <button onclick="editPkg(${p.id},'${p.name.replace(/'/g,"\\'")}',${p.size_gb},${p.active})" class="btn btn-outline btn-sm">${t(lang,'edit')}</button>
         <button onclick="confirmDelete('/api/packages/${p.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>
       </td>
     </tr>`).join('');
@@ -177,12 +175,10 @@ admin.get('/packages', async (c) => {
           <thead><tr>
             <th>${t(lang,'name')}</th>
             <th>${t(lang,'size_gb')}</th>
-            <th>${t(lang,'price_per_gb')}</th>
-            <th>Total Price</th>
             <th>${t(lang,'status')}</th>
             <th>${t(lang,'actions')}</th>
           </tr></thead>
-          <tbody>${rows||`<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">🗂️</div><h3>${t(lang,'no_data')}</h3></div></td></tr>`}</tbody>
+          <tbody>${rows||`<tr><td colspan="4"><div class="empty-state"><div class="empty-state-icon">🗂️</div><h3>${t(lang,'no_data')}</h3></div></td></tr>`}</tbody>
         </table>
       </div>
     </div>
@@ -197,17 +193,14 @@ admin.get('/packages', async (c) => {
         <form method="POST" action="/packages">
           <div class="form-group">
             <label>${t(lang,'name')}</label>
-            <input type="text" name="name" required placeholder="5GB Package"/>
+            <input type="text" name="name" required placeholder="مثال: پکیج ۵ گیگ"/>
           </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>${t(lang,'size_gb')}</label>
-              <input type="number" name="size_gb" min="0.1" step="0.1" required/>
-            </div>
-            <div class="form-group">
-              <label>${t(lang,'price_per_gb')} (؋)</label>
-              <input type="number" name="sale_price_per_gb" min="0.01" step="0.01" required/>
-            </div>
+          <div class="form-group">
+            <label>${t(lang,'size_gb')} (GB)</label>
+            <input type="number" name="size_gb" min="0.1" step="0.1" required placeholder="5"/>
+          </div>
+          <div style="padding:.5rem .75rem;background:var(--bg-secondary);border-radius:8px;font-size:.82rem;color:var(--text-muted);margin-bottom:.75rem">
+            💡 قیمت فروش به ازای هر GB از <a href="/settings" style="color:var(--primary)">تنظیمات شرکت</a> محاسبه می‌شود.
           </div>
           <div class="modal-footer">
             <button type="button" onclick="document.getElementById('add-modal').classList.remove('open')" class="btn btn-outline">${t(lang,'cancel')}</button>
@@ -229,15 +222,9 @@ admin.get('/packages', async (c) => {
             <label>${t(lang,'name')}</label>
             <input type="text" name="name" id="edit-name" required/>
           </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>${t(lang,'size_gb')}</label>
-              <input type="number" name="size_gb" id="edit-gb" min="0.1" step="0.1" required/>
-            </div>
-            <div class="form-group">
-              <label>${t(lang,'price_per_gb')}</label>
-              <input type="number" name="sale_price_per_gb" id="edit-price" min="0.01" step="0.01" required/>
-            </div>
+          <div class="form-group">
+            <label>${t(lang,'size_gb')} (GB)</label>
+            <input type="number" name="size_gb" id="edit-gb" min="0.1" step="0.1" required/>
           </div>
           <div class="form-group">
             <label>${t(lang,'status')}</label>
@@ -254,10 +241,9 @@ admin.get('/packages', async (c) => {
       </div>
     </div>`,
     scripts: `<script>
-    function editPkg(id, name, gb, price, active) {
+    function editPkg(id, name, gb, active) {
       document.getElementById('edit-name').value = name;
       document.getElementById('edit-gb').value = gb;
-      document.getElementById('edit-price').value = price;
       document.getElementById('edit-active').value = active ? '1' : '0';
       document.getElementById('edit-form').action = '/packages/'+id;
       document.getElementById('edit-modal').classList.add('open');
@@ -272,8 +258,8 @@ admin.post('/packages', async (c) => {
   const form = await c.req.formData();
   const name = form.get('name')?.toString().trim() ?? '';
   const size_gb = parseFloat(form.get('size_gb')?.toString() ?? '0');
-  const price = parseFloat(form.get('sale_price_per_gb')?.toString() ?? '0');
-  await c.env.DB.prepare('INSERT INTO packages (company_id, name, size_gb, sale_price_per_gb) VALUES (?,?,?,?)').bind(user.company_id, name, size_gb, price).run();
+  // قیمت از تنظیمات شرکت — در DB ذخیره می‌کنیم ولی مقدار 0 (runtime از settings خوانده می‌شود)
+  await c.env.DB.prepare('INSERT INTO packages (company_id, name, size_gb, sale_price_per_gb) VALUES (?,?,?,0)').bind(user.company_id, name, size_gb).run();
   return new Response(null, { status: 302, headers: { 'Location': '/packages' } });
 });
 
@@ -284,9 +270,9 @@ admin.post('/packages/:id', async (c) => {
   const form = await c.req.formData();
   const name = form.get('name')?.toString().trim() ?? '';
   const size_gb = parseFloat(form.get('size_gb')?.toString() ?? '0');
-  const price = parseFloat(form.get('sale_price_per_gb')?.toString() ?? '0');
   const active = form.get('active')?.toString() === '1' ? 1 : 0;
-  await c.env.DB.prepare('UPDATE packages SET name=?,size_gb=?,sale_price_per_gb=?,active=? WHERE id=? AND company_id=?').bind(name, size_gb, price, active, id, user.company_id).run();
+  // قیمت از تنظیمات خوانده می‌شود — فیلد sale_price_per_gb را 0 نگه می‌داریم
+  await c.env.DB.prepare('UPDATE packages SET name=?,size_gb=?,active=? WHERE id=? AND company_id=?').bind(name, size_gb, active, id, user.company_id).run();
   return new Response(null, { status: 302, headers: { 'Location': '/packages' } });
 });
 

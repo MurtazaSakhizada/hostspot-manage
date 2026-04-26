@@ -311,25 +311,38 @@ allocations.get('/add', async (c) => {
   const lang = c.get('lang');
   if (user.role !== 'owner') return c.redirect('/allocations');
 
-  const branches = await c.env.DB.prepare('SELECT * FROM branches WHERE company_id=? AND active=1').bind(user.company_id).all<any>();
+  const branches = await c.env.DB.prepare('SELECT * FROM branches WHERE company_id=? AND active=1 ORDER BY name ASC').bind(user.company_id).all<any>();
   const packages = await c.env.DB.prepare('SELECT * FROM packages WHERE company_id=? AND active=1 ORDER BY size_gb ASC').bind(user.company_id).all<any>();
-  const sellers = await c.env.DB.prepare("SELECT * FROM users WHERE company_id=? AND role='seller' AND active=1").bind(user.company_id).all<any>();
+  // همه فروشندگان — فیلتر بر اساس شعبه با AJAX انجام می‌شود
+  const sellers = await c.env.DB.prepare("SELECT id, full_name, commission_rate, branch_id FROM users WHERE company_id=? AND role='seller' AND active=1 ORDER BY full_name ASC").bind(user.company_id).all<any>();
+
+  // قیمت فی GB از تنظیمات شرکت
+  const company = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?').bind(user.company_id).first<any>();
+  const settings = JSON.parse(company?.settings || '{}');
+  const pricePerGb: number = settings.purchase_price_per_gb ?? 0;
 
   const branchOpts = (branches.results||[]).map((b: any) => `<option value="${b.id}">${b.name}</option>`).join('');
-  const sellerOpts = (sellers.results||[]).map((s: any) =>
-    `<option value="${s.id}" data-rate="${s.commission_rate}">${s.full_name} (${Math.round(s.commission_rate*100)}% comm)</option>`
-  ).join('');
 
-  const pkgOptsForJS = JSON.stringify(
-    Object.fromEntries((packages.results||[]).map((p: any) => [p.id, {name: p.name, gb: p.size_gb, price: p.sale_price_per_gb}]))
+  // برای AJAX: لیست فروشندگان به صورت JSON (با branch_id)
+  const sellersJson = JSON.stringify(
+    (sellers.results||[]).map((s: any) => ({
+      id: s.id,
+      name: s.full_name,
+      rate: s.commission_rate,
+      branch_id: s.branch_id ?? null
+    }))
   );
 
-  // Build package rows
+  const pkgOptsForJS = JSON.stringify(
+    Object.fromEntries((packages.results||[]).map((p: any) => [p.id, {name: p.name, gb: p.size_gb, price: pricePerGb}]))
+  );
+
+  // Build package rows — قیمت از تنظیمات
   const pkgRows = (packages.results||[]).map((p: any) => `
     <tr data-pkg-id="${p.id}">
       <td>
         <div class="font-bold">${p.name}</div>
-        <div style="font-size:.75rem;color:var(--text-muted)">${p.size_gb} GB @ ${formatMoney(p.sale_price_per_gb)}/GB</div>
+        <div style="font-size:.75rem;color:var(--text-muted)">${p.size_gb} GB × ${formatMoney(pricePerGb)}/GB = <strong>${formatMoney(p.size_gb * pricePerGb)}</strong></div>
       </td>
       <td>
         <input type="number" name="qty_${p.id}" id="qty_${p.id}" min="0" value="0"
@@ -344,81 +357,87 @@ allocations.get('/add', async (c) => {
     </tr>`).join('');
 
   return c.html(pageShell({
-    title: 'Allocate to Seller', lang, user, activePage: 'allocations',
+    title: t(lang,'add_allocation') || 'تخصیص جدید', lang, user, activePage: 'allocations',
     body: `
     <div class="page-header">
-      <div class="page-title">🔀 Allocate Stock to Seller (Batch)</div>
-      <a href="/allocations" class="btn btn-outline">← Back</a>
+      <div class="page-title">🔀 تخصیص موجودی به فروشنده</div>
+      <a href="/allocations" class="btn btn-outline">← بازگشت</a>
     </div>
     <div class="card" style="max-width:750px">
       <form method="POST" action="/allocations" id="alloc-form">
 
-        <!-- Seller, Branch -->
+        <!-- ابتدا شعبه انتخاب شود، سپس فروشنده -->
         <div class="form-row">
           <div class="form-group">
-            <label>${t(lang,'seller')} *</label>
-            <select name="seller_id" id="sel-sel" required onchange="updateAllRates()">${sellerOpts||'<option value="">No sellers found</option>'}</select>
+            <label>🏢 ${t(lang,'branch')} *</label>
+            <select name="branch_id" id="branch-sel" required onchange="filterSellers()">
+              <option value="">-- انتخاب شعبه --</option>
+              ${branchOpts}
+            </select>
           </div>
           <div class="form-group">
-            <label>${t(lang,'branch')} *</label>
-            <select name="branch_id" required>${branchOpts}</select>
+            <label>👤 ${t(lang,'seller')} *</label>
+            <select name="seller_id" id="sel-sel" required onchange="updateAllRates()" disabled>
+              <option value="">-- ابتدا شعبه انتخاب کنید --</option>
+            </select>
           </div>
         </div>
 
-        <!-- Commission rate display -->
-        <div style="margin:-0.25rem 0 1rem;padding:.5rem .875rem;background:var(--gray-50);border-radius:8px;font-size:.85rem;display:flex;gap:.5rem;align-items:center">
-          <span>Commission Rate:</span>
-          <strong id="rate-display" class="text-warning">—</strong>
-          <span style="color:var(--text-muted)">(auto-applied from seller profile)</span>
+        <!-- نرخ کمیسیون -->
+        <div style="margin:-0.25rem 0 1rem;padding:.5rem .875rem;background:var(--gray-50);border-radius:8px;font-size:.85rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap">
+          <span>💸 نرخ کمیسیون: <strong id="rate-display" class="text-warning">—</strong></span>
+          <span style="color:var(--text-muted)">|</span>
+          <span>💵 قیمت فی GB: <strong class="text-primary">${formatMoney(pricePerGb)} ؋</strong></span>
+          <span style="font-size:.75rem;color:var(--text-muted)">(از تنظیمات)</span>
         </div>
 
-        <!-- Package Quantities -->
+        <!-- جدول پکیج‌ها -->
         <div class="form-group">
-          <label style="font-weight:600;font-size:.9rem">📋 Enter Quantities per Package</label>
-          <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:.5rem">Leave 0 for packages not included in this allocation</div>
+          <label style="font-weight:600;font-size:.9rem">📋 تعداد هر پکیج را وارد کنید</label>
+          <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:.5rem">پکیج‌هایی که نمی‌خواهید را 0 بگذارید</div>
           <div class="table-wrapper" style="border:1px solid var(--border);border-radius:8px">
             <table>
               <thead><tr>
-                <th>Package</th>
-                <th>Quantity</th>
+                <th>پکیج</th>
+                <th>تعداد</th>
                 <th>GB</th>
-                <th>Gross</th>
-                <th>Commission</th>
-                <th>Net</th>
+                <th>ناخالص</th>
+                <th>کمیسیون</th>
+                <th>خالص</th>
               </tr></thead>
-              <tbody>${pkgRows || '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:1rem">No packages. <a href="/packages">Add packages first →</a></td></tr>'}</tbody>
+              <tbody>${pkgRows || '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:1rem">پکیجی ثبت نشده. <a href="/packages">ابتدا پکیج اضافه کنید →</a></td></tr>'}</tbody>
             </table>
           </div>
         </div>
 
-        <!-- Notes -->
+        <!-- یادداشت -->
         <div class="form-group">
-          <label>Notes (optional)</label>
-          <textarea name="notes" rows="2" placeholder="e.g. Weekly stock allocation..."></textarea>
+          <label>یادداشت (اختیاری)</label>
+          <textarea name="notes" rows="2" placeholder="مثال: تخصیص هفتگی موجودی..."></textarea>
         </div>
 
-        <!-- Live Summary -->
+        <!-- خلاصه زنده -->
         <div class="calc-preview" id="batch-summary" style="display:none">
-          <div style="font-size:.85rem;font-weight:600;margin-bottom:.75rem">📊 Allocation Summary</div>
+          <div style="font-size:.85rem;font-weight:600;margin-bottom:.75rem">📊 خلاصه تخصیص</div>
           <div class="calc-preview-grid" style="grid-template-columns:repeat(4,1fr)">
             <div class="calc-item">
-              <div class="calc-item-label">Packages</div>
+              <div class="calc-item-label">تعداد پکیج</div>
               <div class="calc-item-value" id="sum-pkgs">0</div>
             </div>
             <div class="calc-item">
-              <div class="calc-item-label">Total GB</div>
+              <div class="calc-item-label">مجموع GB</div>
               <div class="calc-item-value main" id="sum-gb">0 GB</div>
             </div>
             <div class="calc-item">
-              <div class="calc-item-label">Total Gross</div>
+              <div class="calc-item-label">ناخالص کل</div>
               <div class="calc-item-value" id="sum-gross">؋ 0</div>
             </div>
             <div class="calc-item">
-              <div class="calc-item-label">Commission</div>
+              <div class="calc-item-label">کمیسیون</div>
               <div class="calc-item-value" id="sum-comm" style="color:var(--warning)">؋ 0</div>
             </div>
             <div class="calc-item" style="grid-column:1/-1;background:var(--success-bg,#f0fdf4);border-radius:8px">
-              <div class="calc-item-label">Net to Owner</div>
+              <div class="calc-item-label">خالص به مالک</div>
               <div class="calc-item-value main" id="sum-net" style="color:var(--success)">؋ 0</div>
             </div>
           </div>
@@ -426,23 +445,49 @@ allocations.get('/add', async (c) => {
 
         <div class="modal-footer" style="border:none;padding:0;margin-top:1.25rem">
           <a href="/allocations" class="btn btn-outline">${t(lang,'cancel')}</a>
-          <button type="submit" class="btn btn-primary" id="submit-btn" disabled>💾 Save Allocation</button>
+          <button type="submit" class="btn btn-primary" id="submit-btn" disabled>💾 ذخیره تخصیص</button>
         </div>
       </form>
     </div>`,
     scripts: `<script>
     const PKGS = ${pkgOptsForJS};
-    const SELLERS = {};
-    document.querySelectorAll('#sel-sel option').forEach(o => { SELLERS[o.value] = parseFloat(o.dataset.rate||0); });
+    const ALL_SELLERS = ${sellersJson};
+
+    // فیلتر فروشندگان بر اساس شعبه انتخاب‌شده
+    function filterSellers() {
+      const branchId = parseInt(document.getElementById('branch-sel').value) || 0;
+      const selSel = document.getElementById('sel-sel');
+      selSel.innerHTML = '';
+
+      if (!branchId) {
+        selSel.innerHTML = '<option value="">-- ابتدا شعبه انتخاب کنید --</option>';
+        selSel.disabled = true;
+        document.getElementById('rate-display').textContent = '—';
+        return;
+      }
+
+      const filtered = ALL_SELLERS.filter(s => s.branch_id === branchId);
+      if (filtered.length === 0) {
+        selSel.innerHTML = '<option value="">هیچ فروشنده‌ای در این شعبه نیست</option>';
+        selSel.disabled = true;
+      } else {
+        selSel.innerHTML = filtered.map(s =>
+          '<option value="'+s.id+'" data-rate="'+s.rate+'">'+s.name+' ('+Math.round(s.rate*100)+'% کمیسیون)</option>'
+        ).join('');
+        selSel.disabled = false;
+      }
+      updateAllRates();
+    }
 
     function getRate() {
-      const selId = document.getElementById('sel-sel').value;
-      return SELLERS[selId] || 0;
+      const opt = document.getElementById('sel-sel').selectedOptions[0];
+      return parseFloat(opt?.dataset?.rate || 0);
     }
 
     function updateAllRates() {
       const rate = getRate();
-      document.getElementById('rate-display').textContent = (rate*100).toFixed(0)+'%';
+      const selId = document.getElementById('sel-sel').value;
+      document.getElementById('rate-display').textContent = selId ? (rate*100).toFixed(0)+'%' : '—';
       document.querySelectorAll('.qty-input').forEach(inp => updateRow(inp.dataset.pkg));
     }
 
@@ -476,18 +521,19 @@ allocations.get('/add', async (c) => {
           }
         }
       });
-      document.getElementById('sum-pkgs').textContent  = pkgCount+' type'+(pkgCount!==1?'s':'');
+      document.getElementById('sum-pkgs').textContent  = pkgCount+' نوع';
       document.getElementById('sum-gb').textContent    = totalGb.toFixed(totalGb%1===0?0:2)+' GB';
       document.getElementById('sum-gross').textContent = '؋ '+Math.round(totalGross).toLocaleString();
       document.getElementById('sum-comm').textContent  = '؋ '+Math.round(totalComm).toLocaleString()+' ('+(rate*100).toFixed(0)+'%)';
       document.getElementById('sum-net').textContent   = '؋ '+Math.round(totalNet).toLocaleString();
-      const show = pkgCount>0;
-      document.getElementById('batch-summary').style.display = show?'':'none';
-      document.getElementById('submit-btn').disabled = !show;
+      const hasQty = pkgCount > 0;
+      const hasSeller = !!document.getElementById('sel-sel').value;
+      document.getElementById('batch-summary').style.display = hasQty ? '' : 'none';
+      document.getElementById('submit-btn').disabled = !(hasQty && hasSeller);
     }
 
     // init
-    updateAllRates();
+    filterSellers();
     </script>`
   }));
 });
@@ -507,6 +553,11 @@ allocations.post('/', async (c) => {
   const seller = await c.env.DB.prepare('SELECT * FROM users WHERE id=? AND company_id=?').bind(seller_id, user.company_id).first<any>();
   if (!seller) return c.json({error:'Seller not found'}, 404);
 
+  // قیمت فی GB از تنظیمات شرکت (ثابت)
+  const companyRow = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?').bind(user.company_id).first<any>();
+  const companySettings = JSON.parse(companyRow?.settings || '{}');
+  const pricePerGb: number = companySettings.purchase_price_per_gb ?? 0;
+
   const packages = await c.env.DB.prepare('SELECT * FROM packages WHERE company_id=? AND active=1').bind(user.company_id).all<any>();
 
   type LineData = { pkg_id: number; qty: number; size_gb: number; price: number };
@@ -514,7 +565,8 @@ allocations.post('/', async (c) => {
   for (const pkg of (packages.results || [])) {
     const qty = parseInt(form.get(`qty_${pkg.id}`)?.toString() ?? '0') || 0;
     if (qty > 0) {
-      lines.push({ pkg_id: pkg.id, qty, size_gb: pkg.size_gb, price: pkg.sale_price_per_gb });
+      // استفاده از قیمت ثابت از تنظیمات، نه قیمت پکیج
+      lines.push({ pkg_id: pkg.id, qty, size_gb: pkg.size_gb, price: pricePerGb });
     }
   }
 
