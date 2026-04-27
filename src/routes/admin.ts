@@ -616,6 +616,7 @@ admin.get('/settings', async (c) => {
     .bind(user.company_id).first<any>();
   const settings = JSON.parse(company?.settings || '{}');
   const purchasePrice = settings.purchase_price_per_gb ?? '';
+  const salePrice = settings.sale_price_per_gb ?? '';
   const dashMode = settings.dashboard_mode ?? 'owner';
 
   const ok  = c.req.query('ok');
@@ -639,34 +640,53 @@ admin.get('/settings', async (c) => {
     <!-- Purchase Price Card -->
     <div class="card" style="max-width:520px;margin-bottom:1.25rem">
       <div class="card-header">
-        <div class="card-title">📦 Purchase Price Configuration</div>
+        <div class="card-title">📦 تنظیم قیمت‌های GB</div>
       </div>
       <div style="padding:1.25rem">
         <form method="POST" action="/settings/purchase-price">
+
+          <!-- قیمت خرید -->
           <div class="form-group">
-            <label style="font-weight:600">Purchase Price per GB (افغانی)</label>
+            <label style="font-weight:600">💰 قیمت خرید هر GB (از تأمین‌کننده)</label>
             <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.5rem">
-              This is the cost you pay to buy 1 GB of internet from your supplier.
-              Used to calculate net profit: <code>Gross Revenue − Commissions − Purchase Cost</code>
+              قیمتی که شما به‌ازای هر GB از تأمین‌کننده می‌پردازید.
+              برای محاسبه سود خالص استفاده می‌شود: <code>ناخالص − کمیسیون − هزینه خرید</code>
             </div>
             <div style="display:flex;gap:.75rem;align-items:center">
               <input type="number" name="purchase_price_per_gb" min="0" step="0.01"
                 value="${purchasePrice}"
-                placeholder="e.g. 8 or 7.5"
+                placeholder="مثال: 8"
                 style="max-width:160px"
                 required/>
               <span style="color:var(--text-muted);font-size:.9rem">؋ per GB</span>
             </div>
           </div>
-          ${purchasePrice ? `
+
+          <!-- قیمت فروش -->
+          <div class="form-group" style="margin-top:1rem">
+            <label style="font-weight:600">🏷️ قیمت فروش هر GB (به فروشنده)</label>
+            <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.5rem">
+              قیمت ثابتی که هنگام تخصیص پکیج‌ها به فروشندگان اعمال می‌شود.
+            </div>
+            <div style="display:flex;gap:.75rem;align-items:center">
+              <input type="number" name="sale_price_per_gb" min="0" step="0.01"
+                value="${salePrice}"
+                placeholder="مثال: 20"
+                style="max-width:160px"/>
+              <span style="color:var(--text-muted);font-size:.9rem">؋ per GB</span>
+            </div>
+          </div>
+
+          ${(purchasePrice || salePrice) ? `
           <div style="background:var(--bg-tertiary);border-radius:8px;padding:.875rem;margin-bottom:1rem;font-size:.85rem">
-            <strong>Current formula example:</strong><br>
-            If you sell 1,000 GB at ؋20/GB gross → Revenue = ؋20,000<br>
-            Commission (e.g. 10%) = ؋2,000 → After comm: ؋18,000<br>
-            Purchase cost (${purchasePrice} × 1,000) = ؋${(parseFloat(purchasePrice)*1000).toLocaleString()}<br>
-            <strong style="color:var(--success)">Net Profit = ؋${(18000 - parseFloat(purchasePrice)*1000).toLocaleString()}</strong>
+            <strong>نمونه فرمول فعلی (برای ۱٬۰۰۰ GB):</strong><br>
+            ${salePrice ? `فروش: ؋${(parseFloat(salePrice)*1000).toLocaleString()} (${salePrice} × 1,000)<br>` : ''}
+            کمیسیون (مثلاً ۱۰٪): ؋${(parseFloat(salePrice||'0')*1000*0.1).toLocaleString()}<br>
+            ${purchasePrice ? `هزینه خرید: ؋${(parseFloat(purchasePrice)*1000).toLocaleString()} (${purchasePrice} × 1,000)<br>` : ''}
+            <strong style="color:var(--success)">سود خالص = ؋${Math.round((parseFloat(salePrice||'0')-parseFloat(salePrice||'0')*0.1-parseFloat(purchasePrice||'0'))*1000).toLocaleString()}</strong>
           </div>` : ''}
-          <button type="submit" class="btn btn-primary">💾 Save Purchase Price</button>
+
+          <button type="submit" class="btn btn-primary">💾 ذخیره قیمت‌ها</button>
         </form>
       </div>
     </div>
@@ -776,15 +796,19 @@ admin.post('/settings/purchase-price', async (c) => {
   const user = c.get('user');
   if (user.role !== 'owner') return c.redirect('/dashboard');
   const form = await c.req.formData();
-  const val = parseFloat(form.get('purchase_price_per_gb')?.toString() ?? '');
-  if (isNaN(val) || val < 0) {
+  const purchaseVal = parseFloat(form.get('purchase_price_per_gb')?.toString() ?? '');
+  const saleVal     = parseFloat(form.get('sale_price_per_gb')?.toString() ?? '');
+  if (isNaN(purchaseVal) || purchaseVal < 0) {
     return new Response(null, { status: 302, headers: { 'Location': '/settings?err=invalid' } });
   }
   // Read current settings and merge
   const company = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?')
     .bind(user.company_id).first<{settings:string}>();
   const settings = JSON.parse(company?.settings || '{}');
-  settings.purchase_price_per_gb = val;
+  settings.purchase_price_per_gb = purchaseVal;
+  if (!isNaN(saleVal) && saleVal >= 0) {
+    settings.sale_price_per_gb = saleVal;
+  }
   await c.env.DB.prepare('UPDATE companies SET settings=? WHERE id=?')
     .bind(JSON.stringify(settings), user.company_id).run();
   return new Response(null, { status: 302, headers: { 'Location': '/settings?ok=1' } });

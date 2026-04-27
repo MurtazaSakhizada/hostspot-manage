@@ -316,10 +316,10 @@ allocations.get('/add', async (c) => {
   // همه فروشندگان — فیلتر بر اساس شعبه با AJAX انجام می‌شود
   const sellers = await c.env.DB.prepare("SELECT id, full_name, commission_rate, branch_id FROM users WHERE company_id=? AND role='seller' AND active=1 ORDER BY full_name ASC").bind(user.company_id).all<any>();
 
-  // قیمت فی GB از تنظیمات شرکت
+  // قیمت فروش فی GB از تنظیمات شرکت (sale_price_per_gb)
   const company = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?').bind(user.company_id).first<any>();
   const settings = JSON.parse(company?.settings || '{}');
-  const pricePerGb: number = settings.purchase_price_per_gb ?? 0;
+  const pricePerGb: number = settings.sale_price_per_gb ?? settings.purchase_price_per_gb ?? 0;
 
   const branchOpts = (branches.results||[]).map((b: any) => `<option value="${b.id}">${b.name}</option>`).join('');
 
@@ -387,8 +387,8 @@ allocations.get('/add', async (c) => {
         <div style="margin:-0.25rem 0 1rem;padding:.5rem .875rem;background:var(--gray-50);border-radius:8px;font-size:.85rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap">
           <span>💸 نرخ کمیسیون: <strong id="rate-display" class="text-warning">—</strong></span>
           <span style="color:var(--text-muted)">|</span>
-          <span>💵 قیمت فی GB: <strong class="text-primary">${formatMoney(pricePerGb)} ؋</strong></span>
-          <span style="font-size:.75rem;color:var(--text-muted)">(از تنظیمات)</span>
+          <span>🏷️ قیمت فروش فی GB: <strong class="text-primary">${formatMoney(pricePerGb)} ؋</strong></span>
+          <span style="font-size:.75rem;color:var(--text-muted)">(از تنظیمات شرکت)</span>
         </div>
 
         <!-- جدول پکیج‌ها -->
@@ -553,10 +553,10 @@ allocations.post('/', async (c) => {
   const seller = await c.env.DB.prepare('SELECT * FROM users WHERE id=? AND company_id=?').bind(seller_id, user.company_id).first<any>();
   if (!seller) return c.json({error:'Seller not found'}, 404);
 
-  // قیمت فی GB از تنظیمات شرکت (ثابت)
+  // قیمت فروش فی GB از تنظیمات شرکت (sale_price_per_gb ثابت)
   const companyRow = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?').bind(user.company_id).first<any>();
   const companySettings = JSON.parse(companyRow?.settings || '{}');
-  const pricePerGb: number = companySettings.purchase_price_per_gb ?? 0;
+  const pricePerGb: number = companySettings.sale_price_per_gb ?? companySettings.purchase_price_per_gb ?? 0;
 
   const packages = await c.env.DB.prepare('SELECT * FROM packages WHERE company_id=? AND active=1').bind(user.company_id).all<any>();
 
