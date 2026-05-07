@@ -100,9 +100,9 @@ auth.post('/login', async (c) => {
   
   const headers = new Headers({
     'Location': '/dashboard',
-    'Set-Cookie': `session=${sessionId}; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=604800`,
+    'Set-Cookie': `session=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`,
   });
-  headers.append('Set-Cookie', `lang=${userLang}; Path=/; SameSite=None; Secure; Max-Age=31536000`);
+  headers.append('Set-Cookie', `lang=${userLang}; Path=/; SameSite=Lax; Max-Age=31536000`);
   return new Response(null, { status: 302, headers });
 });
 
@@ -115,7 +115,7 @@ auth.get('/logout', async (c) => {
     status: 302,
     headers: {
       'Location': '/login',
-      'Set-Cookie': 'session=; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=0'
+      'Set-Cookie': 'session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0'
     }
   });
 });
