@@ -97,13 +97,21 @@ auth.post('/login', async (c) => {
 
   const sessionId = await createSession(c.env.DB, user.id, user.company_id);
   const userLang = user.language || 'en';
-  
+
+  // Use HTML-based redirect so cookies are set in first-party context
+  // (plain 302 redirect fails in iframe preview because of third-party cookie blocking)
   const headers = new Headers({
-    'Location': '/dashboard',
+    'Content-Type': 'text/html; charset=UTF-8',
     'Set-Cookie': `session=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`,
   });
   headers.append('Set-Cookie', `lang=${userLang}; Path=/; SameSite=Lax; Max-Age=31536000`);
-  return new Response(null, { status: 302, headers });
+  return new Response(
+    `<!DOCTYPE html><html><head>
+    <meta http-equiv="refresh" content="0;url=/dashboard">
+    <script>window.location.replace('/dashboard');</script>
+    </head><body>Redirecting...</body></html>`,
+    { status: 200, headers }
+  );
 });
 
 auth.get('/logout', async (c) => {
