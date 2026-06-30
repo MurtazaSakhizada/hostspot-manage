@@ -485,7 +485,7 @@ const fa: Translations = {
   inventory: 'موجودی',
   allocations: 'تخصیص‌ها',
   sales: 'فروش‌ها',
-  payments: 'دریافتی‌ها',
+  payments: 'پرداختی‌ها',
   reports: 'راپورها',
   expenses: 'مصارف',
   notifications: 'اعلانات',
