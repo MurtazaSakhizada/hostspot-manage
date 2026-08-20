@@ -22,8 +22,6 @@ import notificationsRoutes from './routes/notifications';
 import expensesRoutes from './routes/expenses';
 import ledgerRoutes from './routes/ledger';
 import mobileRoutes from './routes/mobile';
-import searchRoutes from './routes/search';
-import peopleRoutes from './routes/people';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -113,8 +111,6 @@ app.route('/notifications', notificationsRoutes);
 app.route('/expenses', expensesRoutes);
 app.route('/ledger', ledgerRoutes);
 app.route('/mobile', mobileRoutes);
-app.route('/search', searchRoutes);
-app.route('/people', peopleRoutes);
 app.route('/', adminRoutes);
 
 // ---- API: Delete endpoints (re-mount under app root) ----
