@@ -252,6 +252,7 @@ inventory.get('/', async (c) => {
       <td style="max-width:200px;color:var(--text-muted);font-size:.82rem">${b.notes||'—'}</td>
       <td>
         <button onclick="toggleRow('inv-batch-${i}')" class="btn btn-outline btn-sm">📋 Details</button>
+        <a href="/inventory/${b.id}/edit" class="btn btn-outline btn-sm">✏️ ویرایش</a>
         <button onclick="confirmDelete('/api/inventory-batch/${b.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>
       </td>
     </tr>
@@ -583,6 +584,269 @@ inventory.post('/', async (c) => {
     message: `${formatGB(Math.round(totalGb*100)/100)} added to ${branchRow?.name ?? 'branch'} · Value: ${formatMoney(Math.round(totalGross*100)/100)}`,
     link: '/inventory'
   });
+
+  return new Response(null, { status: 302, headers: { 'Location': '/inventory' } });
+});
+
+// ============================================================
+// GET /inventory/:id/edit  — Edit form for an existing inventory batch
+// ============================================================
+inventory.get('/:id/edit', async (c) => {
+  const user = c.get('user');
+  const lang = c.get('lang');
+  if (user.role !== 'owner') return c.redirect('/inventory');
+
+  const id = c.req.param('id');
+  const batch = await c.env.DB.prepare(
+    'SELECT b.*, br.name as branch_name FROM inventory_batches b JOIN branches br ON br.id=b.branch_id WHERE b.id=? AND b.company_id=?'
+  ).bind(id, user.company_id).first<any>();
+  if (!batch) return c.redirect('/inventory');
+
+  const lines = await c.env.DB.prepare(
+    'SELECT l.*, p.name as pkg_name FROM inventory_batch_lines l JOIN packages p ON p.id=l.package_id WHERE l.batch_id=?'
+  ).bind(id).all<any>();
+
+  const packages = await c.env.DB.prepare(
+    'SELECT * FROM packages WHERE company_id=? AND active=1 ORDER BY size_gb ASC'
+  ).bind(user.company_id).all<any>();
+
+  const branches = await c.env.DB.prepare(
+    'SELECT * FROM branches WHERE company_id=? AND active=1 ORDER BY name ASC'
+  ).bind(user.company_id).all<any>();
+
+  const company = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?').bind(user.company_id).first<{settings:string}>();
+  const settings = JSON.parse(company?.settings || '{}');
+  const purchasePricePerGb: number = settings.purchase_price_per_gb ?? 0;
+
+  // Build qty map from existing lines
+  const qtyMap: Record<number, number> = {};
+  for (const l of (lines.results || [])) qtyMap[l.package_id] = l.quantity;
+
+  const branchOpts = (branches.results || []).map((b: any) =>
+    `<option value="${b.id}" ${String(b.id) === String(batch.branch_id) ? 'selected' : ''}>${b.name}</option>`
+  ).join('');
+
+  const pkgOptsForJS = JSON.stringify(
+    Object.fromEntries((packages.results || []).map((p: any) => [p.id, { name: p.name, gb: p.size_gb, price: p.sale_price_per_gb }]))
+  );
+
+  const hasPurchasePrice = purchasePricePerGb > 0;
+  const purchasePriceLine = hasPurchasePrice
+    ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:.5rem">
+         Purchase price: <strong style="color:var(--warning)">${formatMoney(purchasePricePerGb)}/GB</strong>
+         — costs shown in yellow below
+       </div>`
+    : '';
+
+  const pkgRows = (packages.results || []).map((p: any) => {
+    const qty = qtyMap[p.id] ?? 0;
+    return `
+    <tr data-pkg-id="${p.id}" data-gb="${p.size_gb}" data-price="${p.sale_price_per_gb}">
+      <td>
+        <div class="font-bold">${p.name}</div>
+        <div style="font-size:.75rem;color:var(--text-muted)">${p.size_gb} GB @ ${formatMoney(p.sale_price_per_gb)}/GB</div>
+      </td>
+      <td>
+        <input type="number" name="qty_${p.id}" id="qty_${p.id}" min="0" value="${qty}"
+          class="qty-input" data-pkg="${p.id}" oninput="updateRow(${p.id})"
+          style="width:80px;padding:.35rem .5rem;border:1px solid var(--border);border-radius:6px;text-align:center;font-size:.9rem"/>
+      </td>
+      <td id="gb_${p.id}" class="text-primary font-bold">${qty > 0 ? (p.size_gb * qty).toFixed(p.size_gb * qty % 1 === 0 ? 0 : 2) + ' GB' : '—'}</td>
+      <td id="val_${p.id}" class="text-success">${qty > 0 ? formatMoney(p.size_gb * qty * p.sale_price_per_gb) : '—'}</td>
+      ${hasPurchasePrice ? `<td id="cost_${p.id}" class="text-warning" style="font-size:.85rem">${qty > 0 ? formatMoney(p.size_gb * qty * purchasePricePerGb) : '—'}</td>` : ''}
+    </tr>`;
+  }).join('');
+
+  return c.html(pageShell({
+    title: 'ویرایش انباری', lang, user, activePage: 'inventory',
+    body: `
+    <div class="page-header">
+      <div class="page-title">✏️ ویرایش انباری #${batch.id}</div>
+      <a href="/inventory" class="btn btn-outline">← بازگشت</a>
+    </div>
+    <div class="card" style="max-width:700px">
+      <form method="POST" action="/inventory/${id}/edit" id="inv-form">
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>${t(lang,'branch')} *</label>
+            <select name="branch_id" required>${branchOpts}</select>
+          </div>
+          <div class="form-group">
+            <label>تاریخ ثبت</label>
+            <input type="date" name="entry_date" value="${batch.created_at ? batch.created_at.split('T')[0] : new Date().toISOString().split('T')[0]}"/>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label style="font-weight:600;font-size:.9rem">📋 تعداد هر پکیج را وارد کنید</label>
+          ${purchasePriceLine}
+          <div class="table-wrapper" style="border:1px solid var(--border);border-radius:8px">
+            <table>
+              <thead><tr>
+                <th>پکیج</th>
+                <th>تعداد</th>
+                <th>مجموع GB</th>
+                <th>ارزش فروش</th>
+                ${hasPurchasePrice ? `<th style="color:var(--warning)">هزینه خرید</th>` : ''}
+              </tr></thead>
+              <tbody>${pkgRows || `<tr><td colspan="${hasPurchasePrice ? 5 : 4}" style="text-align:center;color:var(--text-muted);padding:1rem">پکیجی یافت نشد. <a href="/packages">ابتدا پکیج اضافه کنید →</a></td></tr>`}</tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>یادداشت (اختیاری)</label>
+          <textarea name="notes" rows="2">${batch.notes || ''}</textarea>
+        </div>
+
+        <div class="calc-preview" id="batch-summary">
+          <div style="font-size:.85rem;font-weight:600;margin-bottom:.75rem">📊 خلاصه انباری</div>
+          <div class="calc-preview-grid" style="grid-template-columns:repeat(${hasPurchasePrice ? 4 : 3},1fr)">
+            <div class="calc-item">
+              <div class="calc-item-label">تعداد پکیج</div>
+              <div class="calc-item-value" id="sum-pkgs">—</div>
+            </div>
+            <div class="calc-item">
+              <div class="calc-item-label">مجموع GB</div>
+              <div class="calc-item-value main" id="sum-gb">—</div>
+            </div>
+            <div class="calc-item">
+              <div class="calc-item-label">ارزش فروش</div>
+              <div class="calc-item-value" id="sum-val">—</div>
+            </div>
+            ${hasPurchasePrice ? `
+            <div class="calc-item">
+              <div class="calc-item-label" style="color:var(--warning)">هزینه خرید</div>
+              <div class="calc-item-value" id="sum-cost" style="color:var(--warning)">—</div>
+            </div>` : ''}
+          </div>
+        </div>
+
+        <div class="modal-footer" style="border:none;padding:0;margin-top:1.25rem">
+          <a href="/inventory" class="btn btn-outline">انصراف</a>
+          <button type="submit" class="btn btn-primary" id="submit-btn">💾 ذخیره تغییرات</button>
+        </div>
+      </form>
+    </div>`,
+    scripts: `<script>
+    const PKGS = ${pkgOptsForJS};
+    const PURCHASE_PRICE = ${purchasePricePerGb};
+
+    function updateRow(pkgId) {
+      const qty = parseInt(document.getElementById('qty_'+pkgId).value) || 0;
+      const p = PKGS[pkgId];
+      if (!p) return;
+      const gb = p.gb * qty;
+      const val = gb * p.price;
+      const cost = gb * PURCHASE_PRICE;
+      document.getElementById('gb_'+pkgId).textContent = qty > 0 ? gb.toFixed(gb%1===0?0:2)+' GB' : '—';
+      document.getElementById('val_'+pkgId).textContent = qty > 0 ? '؋ '+Math.round(val).toLocaleString() : '—';
+      const costEl = document.getElementById('cost_'+pkgId);
+      if (costEl) costEl.textContent = qty > 0 && PURCHASE_PRICE > 0 ? '؋ '+Math.round(cost).toLocaleString() : '—';
+      updateSummary();
+    }
+
+    function updateSummary() {
+      let totalGb = 0, totalVal = 0, pkgCount = 0;
+      document.querySelectorAll('.qty-input').forEach(inp => {
+        const qty = parseInt(inp.value) || 0;
+        if (qty > 0) {
+          const p = PKGS[inp.dataset.pkg];
+          if (p) { totalGb += p.gb * qty; totalVal += p.gb * qty * p.price; pkgCount++; }
+        }
+      });
+      document.getElementById('sum-pkgs').textContent = pkgCount + ' نوع';
+      document.getElementById('sum-gb').textContent = totalGb.toFixed(totalGb%1===0?0:2)+' GB';
+      document.getElementById('sum-val').textContent = '؋ '+Math.round(totalVal).toLocaleString();
+      const costEl = document.getElementById('sum-cost');
+      if (costEl && PURCHASE_PRICE > 0) costEl.textContent = '؋ '+Math.round(totalGb*PURCHASE_PRICE).toLocaleString();
+    }
+
+    // Init calculations on page load
+    document.querySelectorAll('.qty-input').forEach(inp => {
+      if ((parseInt(inp.value)||0) > 0) updateRow(inp.dataset.pkg);
+    });
+    updateSummary();
+    </script>`
+  }));
+});
+
+// ============================================================
+// POST /inventory/:id/edit  — Save edited inventory batch
+// ============================================================
+inventory.post('/:id/edit', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({ error: 'Forbidden' }, 403);
+
+  const id = c.req.param('id');
+  const batch = await c.env.DB.prepare(
+    'SELECT * FROM inventory_batches WHERE id=? AND company_id=?'
+  ).bind(id, user.company_id).first<any>();
+  if (!batch) return c.redirect('/inventory');
+
+  const form = await c.req.formData();
+  const branch_id = parseInt(form.get('branch_id')?.toString() ?? '0');
+  const notes = form.get('notes')?.toString() ?? '';
+
+  const packages = await c.env.DB.prepare(
+    'SELECT * FROM packages WHERE company_id=? AND active=1'
+  ).bind(user.company_id).all<any>();
+
+  const co = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?').bind(user.company_id).first<{settings:string}>();
+  const coSettings = JSON.parse(co?.settings || '{}');
+  const purchasePricePerGb: number = coSettings.purchase_price_per_gb ?? 0;
+
+  // Build lines from form data
+  type LineData = { pkg_id: number; qty: number; size_gb: number; price: number };
+  const lines: LineData[] = [];
+  for (const pkg of (packages.results || [])) {
+    const qty = parseInt(form.get(`qty_${pkg.id}`)?.toString() ?? '0') || 0;
+    if (qty > 0) {
+      lines.push({ pkg_id: pkg.id, qty, size_gb: pkg.size_gb, price: pkg.sale_price_per_gb });
+    }
+  }
+
+  if (lines.length === 0) {
+    return new Response(null, { status: 302, headers: { 'Location': `/inventory/${id}/edit?err=empty` } });
+  }
+
+  // Recalculate totals
+  let totalGb = 0, totalGross = 0;
+  for (const l of lines) {
+    const calc = calculate({ size_gb: l.size_gb, quantity: l.qty, sale_price_per_gb: l.price, commission_rate: 0 });
+    totalGb += calc.total_gb;
+    totalGross += calc.gross_amount;
+  }
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const totalPurchaseCost = round2(totalGb * purchasePricePerGb);
+
+  // Update batch header
+  await c.env.DB.prepare(`
+    UPDATE inventory_batches
+    SET branch_id=?, total_gb=?, total_gross=?, total_net=?, purchase_cost=?, purchase_price_per_gb=?, notes=?
+    WHERE id=? AND company_id=?`
+  ).bind(
+    branch_id,
+    round2(totalGb),
+    round2(totalGross),
+    round2(totalGross),
+    totalPurchaseCost,
+    purchasePricePerGb,
+    notes || null,
+    id,
+    user.company_id
+  ).run();
+
+  // Replace lines: delete old, insert new
+  await c.env.DB.prepare('DELETE FROM inventory_batch_lines WHERE batch_id=?').bind(id).run();
+  for (const l of lines) {
+    const calc = calculate({ size_gb: l.size_gb, quantity: l.qty, sale_price_per_gb: l.price, commission_rate: 0 });
+    await c.env.DB.prepare(`
+      INSERT INTO inventory_batch_lines (batch_id, company_id, package_id, quantity, size_gb, total_gb, price_per_gb, gross_amount)
+      VALUES (?,?,?,?,?,?,?,?)`
+    ).bind(parseInt(id), user.company_id, l.pkg_id, l.qty, l.size_gb, calc.total_gb, l.price, calc.gross_amount).run();
+  }
 
   return new Response(null, { status: 302, headers: { 'Location': '/inventory' } });
 });

@@ -169,6 +169,7 @@ allocations.get('/', async (c) => {
           <td class="text-success font-bold">${formatMoney(b.total_net)}</td>
           <td>
             <button onclick="toggleRow('al-batch-${i}')" class="btn btn-outline btn-sm">📋 Details</button>
+            <a href="/allocations/${b.id}/edit" class="btn btn-outline btn-sm">✏️ ${t(lang,'edit')}</a>
             <button onclick="confirmDelete('/api/allocation-batch/${b.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>
           </td>
         </tr>
@@ -635,6 +636,268 @@ allocations.post('/', async (c) => {
     notes:            `Allocation batch #${batch.id}: ${formatGB(round2(totalGb))} · Net: ${formatMoney(round2(totalNet))}`,
     created_by:       user.id,
   });
+
+  return new Response(null, { status: 302, headers: { 'Location': '/allocations' } });
+});
+
+// ============================================================
+// GET /allocations/:id/edit  — Edit form for an existing batch
+// ============================================================
+allocations.get('/:id/edit', async (c) => {
+  const user = c.get('user');
+  const lang = c.get('lang');
+  if (user.role !== 'owner') return c.redirect('/allocations');
+
+  const id = c.req.param('id');
+  const batch = await c.env.DB.prepare(
+    'SELECT ab.*, u.full_name as seller_name, br.name as branch_name FROM allocation_batches ab JOIN users u ON u.id=ab.seller_id JOIN branches br ON br.id=ab.branch_id WHERE ab.id=? AND ab.company_id=?'
+  ).bind(id, user.company_id).first<any>();
+  if (!batch) return c.redirect('/allocations');
+
+  const lines = await c.env.DB.prepare(
+    'SELECT l.*, p.name as pkg_name FROM allocation_batch_lines l JOIN packages p ON p.id=l.package_id WHERE l.batch_id=?'
+  ).bind(id).all<any>();
+
+  const packages = await c.env.DB.prepare(
+    'SELECT * FROM packages WHERE company_id=? AND active=1 ORDER BY size_gb ASC'
+  ).bind(user.company_id).all<any>();
+
+  const sellers = await c.env.DB.prepare(
+    "SELECT id, full_name, commission_rate, branch_id FROM users WHERE company_id=? AND role='seller' AND active=1 ORDER BY full_name ASC"
+  ).bind(user.company_id).all<any>();
+
+  const branches = await c.env.DB.prepare(
+    'SELECT id, name FROM branches WHERE company_id=? AND active=1 ORDER BY name ASC'
+  ).bind(user.company_id).all<any>();
+
+  const company = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?').bind(user.company_id).first<any>();
+  const settings = JSON.parse(company?.settings || '{}');
+  const pricePerGb: number = settings.sale_price_per_gb ?? settings.purchase_price_per_gb ?? 0;
+
+  // Build qty map from existing lines
+  const qtyMap: Record<number, number> = {};
+  for (const l of (lines.results || [])) qtyMap[l.package_id] = l.quantity;
+
+  const sellersJson = JSON.stringify(
+    (sellers.results || []).map((s: any) => ({ id: s.id, name: s.full_name, rate: s.commission_rate, branch_id: s.branch_id ?? null }))
+  );
+  const pkgOptsForJS = JSON.stringify(
+    Object.fromEntries((packages.results || []).map((p: any) => [p.id, { name: p.name, gb: p.size_gb, price: pricePerGb }]))
+  );
+  const branchOpts = (branches.results || []).map((b: any) =>
+    `<option value="${b.id}" ${String(b.id) === String(batch.branch_id) ? 'selected' : ''}>${b.name}</option>`
+  ).join('');
+
+  const pkgRows = (packages.results || []).map((p: any) => {
+    const qty = qtyMap[p.id] ?? 0;
+    return `
+    <tr data-pkg-id="${p.id}">
+      <td>
+        <div class="font-bold">${p.name}</div>
+        <div style="font-size:.75rem;color:var(--text-muted)">${p.size_gb} GB × ${formatMoney(pricePerGb)}/GB = <strong>${formatMoney(p.size_gb * pricePerGb)}</strong></div>
+      </td>
+      <td>
+        <input type="number" name="qty_${p.id}" id="qty_${p.id}" min="0" value="${qty}"
+          class="qty-input" data-pkg="${p.id}" oninput="updateRow(${p.id})"
+          style="width:80px;padding:.35rem .5rem;border:1px solid var(--border);border-radius:6px;text-align:center;font-size:.9rem"/>
+      </td>
+      <td id="gb_${p.id}" class="text-primary font-bold">${qty > 0 ? formatGB(p.size_gb * qty) : '—'}</td>
+      <td id="gross_${p.id}">${qty > 0 ? formatMoney(p.size_gb * qty * pricePerGb) : '—'}</td>
+      <td id="comm_${p.id}" class="text-warning">—</td>
+      <td id="net_${p.id}" class="text-success font-bold">—</td>
+    </tr>`;
+  }).join('');
+
+  return c.html(pageShell({
+    title: 'ویرایش تخصیص', lang, user, activePage: 'allocations',
+    body: `
+    <div class="page-header">
+      <div class="page-title">✏️ ویرایش تخصیص #${batch.id}</div>
+      <a href="/allocations" class="btn btn-outline">← بازگشت</a>
+    </div>
+    <div class="card" style="max-width:750px">
+      <form method="POST" action="/allocations/${id}/edit" id="alloc-form">
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>🏢 شعبه *</label>
+            <select name="branch_id" id="branch-sel" required onchange="filterSellers()">
+              <option value="">-- انتخاب شعبه --</option>
+              ${branchOpts}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>👤 فروشنده *</label>
+            <select name="seller_id" id="sel-sel" required onchange="updateAllRates()">
+              <option value="">-- انتخاب فروشنده --</option>
+              ${(sellers.results || []).map((s: any) =>
+                `<option value="${s.id}" data-rate="${s.commission_rate}" ${String(s.id) === String(batch.seller_id) ? 'selected' : ''}>${s.full_name} (${Math.round(s.commission_rate * 100)}% کمیسیون)</option>`
+              ).join('')}
+            </select>
+          </div>
+        </div>
+
+        <div style="margin:-0.25rem 0 1rem;padding:.5rem .875rem;background:var(--gray-50);border-radius:8px;font-size:.85rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap">
+          <span>💸 نرخ کمیسیون: <strong id="rate-display" class="text-warning">${Math.round(batch.commission_rate * 100)}%</strong></span>
+          <span style="color:var(--text-muted)">|</span>
+          <span>💵 قیمت فی GB: <strong class="text-primary">${formatMoney(pricePerGb)} ؋</strong></span>
+          <span style="font-size:.75rem;color:var(--text-muted)">(از تنظیمات)</span>
+        </div>
+
+        <div class="form-group">
+          <label style="font-weight:600;font-size:.9rem">📋 تعداد هر پکیج</label>
+          <div class="table-wrapper" style="border:1px solid var(--border);border-radius:8px">
+            <table>
+              <thead><tr>
+                <th>پکیج</th><th>تعداد</th><th>GB</th><th>ناخالص</th><th>کمیسیون</th><th>خالص</th>
+              </tr></thead>
+              <tbody>${pkgRows}</tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>یادداشت (اختیاری)</label>
+          <textarea name="notes" rows="2">${batch.notes || ''}</textarea>
+        </div>
+
+        <div class="calc-preview" id="batch-summary">
+          <div style="font-size:.85rem;font-weight:600;margin-bottom:.75rem">📊 خلاصه تخصیص</div>
+          <div class="calc-preview-grid" style="grid-template-columns:repeat(4,1fr)">
+            <div class="calc-item"><div class="calc-item-label">تعداد پکیج</div><div class="calc-item-value" id="sum-pkgs">—</div></div>
+            <div class="calc-item"><div class="calc-item-label">مجموع GB</div><div class="calc-item-value main" id="sum-gb">—</div></div>
+            <div class="calc-item"><div class="calc-item-label">ناخالص کل</div><div class="calc-item-value" id="sum-gross">—</div></div>
+            <div class="calc-item"><div class="calc-item-label">کمیسیون</div><div class="calc-item-value" id="sum-comm" style="color:var(--warning)">—</div></div>
+            <div class="calc-item" style="grid-column:1/-1;background:var(--success-bg,#f0fdf4);border-radius:8px">
+              <div class="calc-item-label">خالص به مالک</div>
+              <div class="calc-item-value main" id="sum-net" style="color:var(--success)">—</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer" style="border:none;padding:0;margin-top:1.25rem">
+          <a href="/allocations" class="btn btn-outline">انصراف</a>
+          <button type="submit" class="btn btn-primary" id="submit-btn">💾 ذخیره تغییرات</button>
+        </div>
+      </form>
+    </div>`,
+    scripts: `<script>
+    const PKGS = ${pkgOptsForJS};
+    const ALL_SELLERS = ${sellersJson};
+    const CURRENT_SELLER_ID = ${batch.seller_id};
+    const CURRENT_BRANCH_ID = ${batch.branch_id};
+
+    function filterSellers() {
+      const branchId = parseInt(document.getElementById('branch-sel').value) || 0;
+      const selSel = document.getElementById('sel-sel');
+      if (!branchId) { selSel.innerHTML = '<option value="">-- ابتدا شعبه انتخاب کنید --</option>'; selSel.disabled = true; return; }
+      const filtered = ALL_SELLERS.filter(s => s.branch_id === branchId);
+      selSel.innerHTML = filtered.length === 0
+        ? '<option value="">هیچ فروشنده‌ای در این شعبه نیست</option>'
+        : filtered.map(s => '<option value="'+s.id+'" data-rate="'+s.rate+'"'+(s.id===CURRENT_SELLER_ID?' selected':'')+'>'+s.name+' ('+Math.round(s.rate*100)+'% کمیسیون)</option>').join('');
+      selSel.disabled = filtered.length === 0;
+      updateAllRates();
+    }
+    function getRate() { const o = document.getElementById('sel-sel').selectedOptions[0]; return parseFloat(o?.dataset?.rate||0); }
+    function updateAllRates() {
+      const rate = getRate(), selId = document.getElementById('sel-sel').value;
+      document.getElementById('rate-display').textContent = selId ? (rate*100).toFixed(0)+'%' : '—';
+      document.querySelectorAll('.qty-input').forEach(inp => updateRow(inp.dataset.pkg));
+    }
+    function updateRow(pkgId) {
+      const qty = parseInt(document.getElementById('qty_'+pkgId).value)||0;
+      const p = PKGS[pkgId]; const rate = getRate();
+      if (!p) return;
+      const gb=p.gb*qty, gross=gb*p.price, comm=gross*rate, net=gross-comm;
+      document.getElementById('gb_'+pkgId).textContent    = qty>0 ? gb.toFixed(gb%1===0?0:2)+' GB' : '—';
+      document.getElementById('gross_'+pkgId).textContent = qty>0 ? '؋ '+Math.round(gross).toLocaleString() : '—';
+      document.getElementById('comm_'+pkgId).textContent  = qty>0 ? '؋ '+Math.round(comm).toLocaleString() : '—';
+      document.getElementById('net_'+pkgId).textContent   = qty>0 ? '؋ '+Math.round(net).toLocaleString() : '—';
+      updateSummary();
+    }
+    function updateSummary() {
+      const rate = getRate();
+      let tGb=0,tGross=0,tComm=0,tNet=0,cnt=0;
+      document.querySelectorAll('.qty-input').forEach(inp => {
+        const qty=parseInt(inp.value)||0; if(qty>0){const p=PKGS[inp.dataset.pkg];if(p){const gb=p.gb*qty,gross=gb*p.price,comm=gross*rate;tGb+=gb;tGross+=gross;tComm+=comm;tNet+=(gross-comm);cnt++;}}
+      });
+      document.getElementById('sum-pkgs').textContent = cnt+' نوع';
+      document.getElementById('sum-gb').textContent   = tGb.toFixed(tGb%1===0?0:2)+' GB';
+      document.getElementById('sum-gross').textContent= '؋ '+Math.round(tGross).toLocaleString();
+      document.getElementById('sum-comm').textContent = '؋ '+Math.round(tComm).toLocaleString()+' ('+(rate*100).toFixed(0)+'%)';
+      document.getElementById('sum-net').textContent  = '؋ '+Math.round(tNet).toLocaleString();
+    }
+    // init — set branch then trigger seller filter
+    document.getElementById('branch-sel').value = CURRENT_BRANCH_ID;
+    filterSellers();
+    updateSummary();
+    </script>`
+  }));
+});
+
+// ============================================================
+// POST /allocations/:id/edit  — Save edited allocation batch
+// ============================================================
+allocations.post('/:id/edit', async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'owner') return c.json({ error: 'Forbidden' }, 403);
+
+  const id = c.req.param('id');
+  const batch = await c.env.DB.prepare('SELECT * FROM allocation_batches WHERE id=? AND company_id=?').bind(id, user.company_id).first<any>();
+  if (!batch) return c.redirect('/allocations');
+
+  const form = await c.req.formData();
+  const seller_id = parseInt(form.get('seller_id')?.toString() ?? '0');
+  const branch_id = parseInt(form.get('branch_id')?.toString() ?? '0');
+  const notes = form.get('notes')?.toString() ?? '';
+
+  const seller = await c.env.DB.prepare('SELECT * FROM users WHERE id=? AND company_id=?').bind(seller_id, user.company_id).first<any>();
+  if (!seller) return c.redirect('/allocations');
+
+  const companyRow = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?').bind(user.company_id).first<any>();
+  const companySettings = JSON.parse(companyRow?.settings || '{}');
+  const pricePerGb: number = companySettings.sale_price_per_gb ?? companySettings.purchase_price_per_gb ?? 0;
+
+  const packages = await c.env.DB.prepare('SELECT * FROM packages WHERE company_id=? AND active=1').bind(user.company_id).all<any>();
+
+  type LineData = { pkg_id: number; qty: number; size_gb: number; price: number };
+  const lines: LineData[] = [];
+  for (const pkg of (packages.results || [])) {
+    const qty = parseInt(form.get(`qty_${pkg.id}`)?.toString() ?? '0') || 0;
+    if (qty > 0) lines.push({ pkg_id: pkg.id, qty, size_gb: pkg.size_gb, price: pricePerGb });
+  }
+  if (lines.length === 0) return new Response(null, { status: 302, headers: { 'Location': `/allocations/${id}/edit?err=empty` } });
+
+  const commRate = seller.commission_rate;
+  let totalGb = 0, totalGross = 0, totalComm = 0, totalNet = 0;
+  for (const l of lines) {
+    const calc = calculate({ size_gb: l.size_gb, quantity: l.qty, sale_price_per_gb: l.price, commission_rate: commRate });
+    totalGb += calc.total_gb; totalGross += calc.gross_amount; totalComm += calc.commission_amount; totalNet += calc.net_amount;
+  }
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  // Update batch header
+  await c.env.DB.prepare(`
+    UPDATE allocation_batches
+    SET seller_id=?, branch_id=?, commission_rate=?, total_gb=?, total_gross=?, total_commission=?, total_net=?, notes=?
+    WHERE id=? AND company_id=?`
+  ).bind(seller_id, branch_id, commRate, round2(totalGb), round2(totalGross), round2(totalComm), round2(totalNet), notes || null, id, user.company_id).run();
+
+  // Replace lines
+  await c.env.DB.prepare('DELETE FROM allocation_batch_lines WHERE batch_id=?').bind(id).run();
+  for (const l of lines) {
+    const calc = calculate({ size_gb: l.size_gb, quantity: l.qty, sale_price_per_gb: l.price, commission_rate: commRate });
+    await c.env.DB.prepare(`
+      INSERT INTO allocation_batch_lines (batch_id, company_id, package_id, quantity, size_gb, total_gb, price_per_gb, gross_amount, commission_amount, net_amount)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`
+    ).bind(parseInt(id), user.company_id, l.pkg_id, l.qty, l.size_gb, calc.total_gb, l.price, calc.gross_amount, calc.commission_amount, calc.net_amount).run();
+  }
+
+  // Update ledger entry
+  await c.env.DB.prepare(`
+    UPDATE financial_ledger SET gb_amount=?, money_amount=?, notes=?
+    WHERE company_id=? AND ref_type='allocation_batch' AND ref_id=?`
+  ).bind(round2(totalGb), round2(totalNet), `Allocation batch #${id} (edited): ${formatGB(round2(totalGb))} · Net: ${formatMoney(round2(totalNet))}`, user.company_id, parseInt(id)).run();
 
   return new Response(null, { status: 302, headers: { 'Location': '/allocations' } });
 });
