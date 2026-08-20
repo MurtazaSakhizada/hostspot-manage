@@ -46,6 +46,13 @@ export function pageShell(opts: {
       <i class="icon-ledger">📒</i><span>دفتر مالی</span>
     </a>
     ${isOwner ? `
+    <a href="/people" class="nav-link ${activePage === 'people' ? 'active' : ''}">
+      <i class="icon-people">👥</i><span>افراد</span>
+    </a>` : ''}
+    <a href="/search" class="nav-link ${activePage === 'search' ? 'active' : ''}">
+      <i class="icon-search">🔍</i><span>جستجو</span>
+    </a>
+    ${isOwner ? `
     <a href="/notifications" class="nav-link ${activePage === 'notifications' ? 'active' : ''}" style="position:relative">
       <i class="icon-bell">🔔</i><span>${t(lang, 'notifications')}</span>
     </a>` : ''}
