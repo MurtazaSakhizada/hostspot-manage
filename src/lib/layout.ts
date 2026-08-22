@@ -233,10 +233,10 @@ function showToast(msg, type='success') {
 }
 function confirmDelete(url, msg) {
   if (confirm(msg || 'Are you sure?')) {
-    fetch(url, {method:'DELETE'}).then(r => r.json()).then(d => {
+    fetch(url, {method:'DELETE', credentials:'include'}).then(r => r.json()).then(d => {
       if(d.success) { showToast('Deleted'); setTimeout(()=>location.reload(),500); }
       else showToast(d.error||'Error','error');
-    });
+    }).catch(e => showToast('Error: ' + e.message, 'error'));
   }
 }
 function toggleRow(id) {
