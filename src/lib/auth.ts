@@ -12,6 +12,7 @@ export interface SessionUser {
   commission_rate: number;
   language: string;
   branch_id: number | null;   // seller's assigned branch (null = no restriction / owner)
+  seller_panel_enabled: number; // company-level flag: 1=enabled (default), 0=disabled
 }
 
 export interface SuperAdminUser {
@@ -47,7 +48,8 @@ export async function createSession(db: D1Database, userId: number, companyId: n
 export async function getSessionUser(db: D1Database, sessionId: string | undefined): Promise<SessionUser | null> {
   if (!sessionId) return null;
   const row = await db.prepare(`
-    SELECT u.id, u.company_id, u.username, u.full_name, u.role, u.commission_rate, u.language, u.branch_id
+    SELECT u.id, u.company_id, u.username, u.full_name, u.role, u.commission_rate, u.language, u.branch_id,
+           COALESCE(c.seller_panel_enabled, 1) as seller_panel_enabled
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     JOIN companies c ON c.id = u.company_id

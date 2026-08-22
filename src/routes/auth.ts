@@ -61,7 +61,9 @@ auth.post('/login', async (c) => {
 
   const hash = await hashPassword(password);
   const user = await c.env.DB.prepare(
-    `SELECT u.*, c.name as company_name, COALESCE(c.active,1) as company_active FROM users u 
+    `SELECT u.*, c.name as company_name, COALESCE(c.active,1) as company_active,
+            COALESCE(c.seller_panel_enabled,1) as seller_panel_enabled
+     FROM users u 
      JOIN companies c ON c.id = u.company_id 
      WHERE u.username = ? AND (u.password_hash = ? OR u.password_hash = ?) AND u.active = 1`
   ).bind(username, hash, password + '_hashed').first<any>();
@@ -73,6 +75,16 @@ auth.post('/login', async (c) => {
   // Block login if company is deactivated by super admin
   if (!user.company_active || user.company_active === 0) {
     return c.html(loginPage(lang, lang === 'fa' ? 'حساب شرکت شما غیرفعال شده است. با مدیر سیستم تماس بگیرید.' : lang === 'ps' ? 'ستاسو شرکت غیر فعال شوی. د سیسټم مدیر سره اړیکه ونیسئ.' : 'Your company account has been deactivated. Contact the system administrator.'), 403);
+  }
+
+  // Block seller login if seller_panel_enabled = 0
+  if (user.role === 'seller' && user.seller_panel_enabled === 0) {
+    const msg = lang === 'fa'
+      ? 'دسترسی فروشنده به سیستم توسط مدیر غیرفعال شده است.'
+      : lang === 'ps'
+      ? 'د پلورونکي لاسرسی د مدیر لخوا غیرفعال شوی.'
+      : 'Seller access has been disabled by the administrator.';
+    return c.html(loginPage(lang, msg), 403);
   }
 
   // Block login if company subscription has expired

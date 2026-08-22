@@ -290,7 +290,7 @@ admin.get('/users', async (c) => {
   const lang = c.get('lang');
   if (user.role !== 'owner') return c.redirect('/dashboard');
 
-  const [items, branches] = await Promise.all([
+  const [items, branches, company] = await Promise.all([
     c.env.DB.prepare(`
       SELECT u.*, br.name as branch_name,
         (SELECT COUNT(*) FROM sales WHERE seller_id=u.id AND company_id=u.company_id) as sale_count
@@ -299,7 +299,10 @@ admin.get('/users', async (c) => {
       WHERE u.company_id=? ORDER BY u.created_at DESC`).bind(user.company_id).all<any>(),
     c.env.DB.prepare(`SELECT id, name FROM branches WHERE company_id=? AND active=1 ORDER BY name`)
       .bind(user.company_id).all<any>(),
+    c.env.DB.prepare(`SELECT COALESCE(seller_panel_enabled,1) as seller_panel_enabled FROM companies WHERE id=?`)
+      .bind(user.company_id).first<{seller_panel_enabled:number}>(),
   ]);
+  const sellerPanelEnabled = (company?.seller_panel_enabled ?? 1) !== 0;
 
   const branchOpts = (branches.results||[]).map((b: any) =>
     `<option value="${b.id}">${b.name}</option>`).join('');
@@ -360,16 +363,22 @@ admin.get('/users', async (c) => {
           <button class="modal-close" onclick="document.getElementById('add-modal').classList.remove('open')">✕</button>
         </div>
         <form method="POST" action="/users">
+          ${!sellerPanelEnabled ? `
+          <div style="padding:.625rem .875rem;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;margin-bottom:.875rem;font-size:.82rem;color:#92400e">
+            ⚠️ پنل فروشنده غیرفعال است. یوزرنیم و رمز عبور به‌صورت خودکار تولید می‌شوند.
+          </div>` : ''}
           <div class="form-row">
             <div class="form-group">
               <label>${t(lang,'full_name')}</label>
               <input type="text" name="full_name" required/>
             </div>
+            ${sellerPanelEnabled ? `
             <div class="form-group">
               <label>${t(lang,'username')}</label>
               <input type="text" name="username" required/>
-            </div>
+            </div>` : ''}
           </div>
+          ${sellerPanelEnabled ? `
           <div class="form-row">
             <div class="form-group">
               <label>${t(lang,'password')}</label>
@@ -382,7 +391,13 @@ admin.get('/users', async (c) => {
                 <option value="owner">${t(lang,'owner')}</option>
               </select>
             </div>
-          </div>
+          </div>` : `
+          <div class="form-group">
+            <label>${t(lang,'role')}</label>
+            <select name="role" id="add-role" onchange="toggleCommission('add')">
+              <option value="seller">${t(lang,'seller_role')}</option>
+            </select>
+          </div>`}
           <div class="form-group" id="add-comm-wrap">
             <label>${t(lang,'commission_rate')} (0–100%)</label>
             <input type="number" name="commission_rate" min="0" max="100" step="0.5" value="15" placeholder="15"/>
@@ -510,13 +525,29 @@ admin.post('/users', async (c) => {
   if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
   const form = await c.req.formData();
   const full_name      = form.get('full_name')?.toString().trim() ?? '';
-  const username       = form.get('username')?.toString().trim() ?? '';
-  const password       = form.get('password')?.toString() ?? '';
   const role           = form.get('role')?.toString() ?? 'seller';
   const commission_rate = parseFloat(form.get('commission_rate')?.toString() ?? '0') / 100;
   const language       = form.get('language')?.toString() ?? 'en';
   const branch_id_raw  = form.get('branch_id')?.toString() ?? '';
   const branch_id      = branch_id_raw ? parseInt(branch_id_raw) : null;
+
+  // Check seller_panel_enabled flag
+  const co = await c.env.DB.prepare('SELECT COALESCE(seller_panel_enabled,1) as seller_panel_enabled FROM companies WHERE id=?')
+    .bind(user.company_id).first<{seller_panel_enabled:number}>();
+  const sellerPanelEnabled = (co?.seller_panel_enabled ?? 1) !== 0;
+
+  let username: string;
+  let password: string;
+  if (sellerPanelEnabled) {
+    username = form.get('username')?.toString().trim() ?? '';
+    password = form.get('password')?.toString() ?? '';
+    if (!username || !password) return c.html('Username and password required', 400);
+  } else {
+    // Auto-generate credentials — seller cannot log in anyway (auth.ts blocks it)
+    const rand = () => Math.random().toString(36).slice(2, 8);
+    username = 'seller_' + rand() + rand();
+    password = rand() + rand() + rand();
+  }
 
   const hash = await hashPassword(password);
   try {

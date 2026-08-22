@@ -324,6 +324,18 @@ function saToggleCompany(id, name, active) {
     else alert(d.error || 'Error');
   });
 }
+// Toggle seller panel enabled per company
+function saToggleSellerPanel(id, name, currentVal) {
+  const enabling = currentVal === 0;
+  const msg = enabling
+    ? 'Enable seller panel for "' + name + '"? Sellers will be able to log in and record sales.'
+    : 'Disable seller panel for "' + name + '"? Seller logins will be blocked and their sessions invalidated.';
+  if (!confirm(msg)) return;
+  fetch('/sa/api/companies/' + id + '/toggle-seller-panel', {method:'POST', credentials:'include'}).then(r=>r.json()).then(d=>{
+    if(d.success) location.reload();
+    else alert(d.error || 'Error');
+  });
+}
 // Open/close modal
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
@@ -1039,8 +1051,9 @@ sa.get('/sa/companies/:id', async (c) => {
         </div>
         <div style="color:#64748b;font-size:.75rem;margin-top:.2rem">Created ${fdate(co.created_at)} · ${co.default_language.toUpperCase()}</div>
       </div>
-      <div style="display:flex;gap:.5rem">
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
         <button onclick="saToggleCompany(${id},'${co.name.replace(/'/g,"\\'")}',${isActive?1:0})" class="sa-btn ${isActive ? 'sa-btn-warning' : 'sa-btn-success'}">${isActive ? '⏸ Deactivate' : '▶ Activate'}</button>
+        <button onclick="saToggleSellerPanel(${id},'${co.name.replace(/'/g,"\\\'")}',${co.seller_panel_enabled===0?0:1})" class="sa-btn ${co.seller_panel_enabled===0 ? 'sa-btn-success' : 'sa-btn-ghost'}" title="Seller Panel">${co.seller_panel_enabled===0 ? '👤 Enable Sellers' : '🚫 Disable Sellers'}</button>
         <a href="/sa/companies/${id}/edit" class="sa-btn sa-btn-ghost">✏️ Edit</a>
         <button onclick="saDelete('/sa/api/companies/${id}','${co.name.replace(/'/g,"\\'")}',()=>location.href='/sa/companies')" class="sa-btn sa-btn-danger">🗑 Delete</button>
       </div>
@@ -1290,6 +1303,28 @@ sa.post('/sa/companies/:id/edit', async (c) => {
     return new Response(null, { status: 302, headers: { 'Location': '/sa/companies/${id}' } });
   } catch (e: any) {
     return c.html(`Error: ${e.message}`, 400);
+  }
+});
+
+// ============================================================
+// SA Toggle Seller Panel Enabled
+// ============================================================
+sa.post('/sa/api/companies/:id/toggle-seller-panel', async (c) => {
+  const id = c.req.param('id');
+  try {
+    const co = await c.env.DB.prepare('SELECT COALESCE(seller_panel_enabled,1) as seller_panel_enabled FROM companies WHERE id=?').bind(id).first<{seller_panel_enabled:number}>();
+    if (!co) return c.json({ success: false, error: 'Not found' }, 404);
+    const newVal = co.seller_panel_enabled === 0 ? 1 : 0;
+    await c.env.DB.prepare('UPDATE companies SET seller_panel_enabled=? WHERE id=?').bind(newVal, id).run();
+    // When disabling: kill all seller sessions for this company immediately
+    if (newVal === 0) {
+      await c.env.DB.prepare(
+        `DELETE FROM sessions WHERE company_id=? AND user_id IN (SELECT id FROM users WHERE company_id=? AND role='seller')`
+      ).bind(id, id).run();
+    }
+    return c.json({ success: true, seller_panel_enabled: newVal });
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message }, 500);
   }
 });
 

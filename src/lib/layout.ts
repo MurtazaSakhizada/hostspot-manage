@@ -18,6 +18,10 @@ export function pageShell(opts: {
   const dir = getDir(lang);
   const isRTL = dir === 'rtl';
   const isOwner = user?.role === 'owner';
+  const sellerPanelEnabled = (user?.seller_panel_enabled ?? 1) !== 0;
+  // When seller_panel_enabled=0: seller cannot be logged in (auth blocks it),
+  // but owner nav is fully shown. Seller-exclusive links hidden as a safety measure.
+  const showSellerLinks = isOwner || sellerPanelEnabled;
 
   const navLinks = user ? `
     <!-- ── ALL USERS ─────────────────────────── -->
@@ -33,9 +37,10 @@ export function pageShell(opts: {
     <a href="/sales" class="nav-link ${activePage === 'sales' ? 'active' : ''}">
       <i class="icon-dollar"></i><span>${t(lang, 'sales')}</span>
     </a>
+    ${showSellerLinks ? `
     <a href="/payments" class="nav-link ${activePage === 'payments' ? 'active' : ''}">
       <i class="icon-card"></i><span>${t(lang, 'payments')}</span>
-    </a>
+    </a>` : ''}
     <a href="/reports" class="nav-link ${activePage === 'reports' ? 'active' : ''}">
       <i class="icon-file"></i><span>${t(lang, 'reports')}</span>
     </a>
