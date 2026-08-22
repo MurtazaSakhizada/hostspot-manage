@@ -19,13 +19,10 @@ sales.get('/', async (c) => {
   const period = c.req.query('period') ?? 'all';
   const branchFilter = c.req.query('branch') ?? '';
 
-  // Check seller_panel_enabled (needed to conditionally show Add Sale button)
-  let sellerPanelEnabled = true;
-  if (user.role === 'seller') {
-    const co = await c.env.DB.prepare('SELECT COALESCE(seller_panel_enabled,1) as seller_panel_enabled FROM companies WHERE id=?')
-      .bind(user.company_id).first<{seller_panel_enabled:number}>();
-    sellerPanelEnabled = (co?.seller_panel_enabled ?? 1) !== 0;
-  }
+  // Check seller_panel_enabled for ALL roles (owner needs it too for Add Sale button)
+  const co = await c.env.DB.prepare('SELECT COALESCE(seller_panel_enabled,1) as seller_panel_enabled FROM companies WHERE id=?')
+    .bind(user.company_id).first<{seller_panel_enabled:number}>();
+  const sellerPanelEnabled = (co?.seller_panel_enabled ?? 1) !== 0;
 
   let dateFilter = '';
   if (period === 'today') dateFilter = `AND date(s.snapshot_time) = date('now')`;
@@ -159,7 +156,7 @@ sales.get('/', async (c) => {
         <div class="page-title">💰 ${t(lang,'sales')}</div>
         <div class="page-subtitle">${totals?.cnt??0} transactions</div>
       </div>
-      ${user.role === 'owner' || sellerPanelEnabled ? `<a href="/sales/add" class="btn btn-primary">+ ${t(lang,'add_sale')}</a>` : ''}
+      ${sellerPanelEnabled ? `<a href="/sales/add" class="btn btn-primary">+ ${t(lang,'add_sale')}</a>` : ''}
     </div>
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;align-items:center">
       ${periodBtns}
@@ -384,13 +381,11 @@ sales.get('/add', async (c) => {
   const user = c.get('user');
   const lang = c.get('lang');
 
-  // Block seller from accessing /sales/add when seller_panel_enabled = 0
-  if (user.role === 'seller') {
-    const co = await c.env.DB.prepare('SELECT COALESCE(seller_panel_enabled,1) as seller_panel_enabled FROM companies WHERE id=?')
-      .bind(user.company_id).first<{seller_panel_enabled:number}>();
-    if ((co?.seller_panel_enabled ?? 1) === 0) {
-      return c.redirect('/sales');
-    }
+  // Block access to /sales/add when seller_panel_enabled = 0 (for ALL roles)
+  const co = await c.env.DB.prepare('SELECT COALESCE(seller_panel_enabled,1) as seller_panel_enabled FROM companies WHERE id=?')
+    .bind(user.company_id).first<{seller_panel_enabled:number}>();
+  if ((co?.seller_panel_enabled ?? 1) === 0) {
+    return c.redirect('/sales');
   }
 
   // ── If seller has an assigned branch, restrict to that branch only ──
@@ -503,6 +498,11 @@ sales.get('/add', async (c) => {
 
 sales.post('/', async (c) => {
   const user = c.get('user');
+  // Block new sale submission when seller_panel_enabled = 0
+  const coCheck = await c.env.DB.prepare('SELECT COALESCE(seller_panel_enabled,1) as seller_panel_enabled FROM companies WHERE id=?')
+    .bind(user.company_id).first<{seller_panel_enabled:number}>();
+  if ((coCheck?.seller_panel_enabled ?? 1) === 0) return c.redirect('/sales');
+
   const form = await c.req.formData();
   const seller_id_raw = form.get('seller_id')?.toString() ?? '';
   const seller_id = user.role === 'owner' ? parseInt(seller_id_raw) : user.id;

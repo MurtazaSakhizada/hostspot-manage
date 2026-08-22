@@ -20,7 +20,19 @@ reports.get('/', async (c) => {
   const lang = c.get('lang');
 
   const isOwner = user.role === 'owner';
-  // Seller filter: sellers only see their own sales data
+
+  // ── Check seller_panel_enabled ────────────────────────────
+  const coRow = await c.env.DB.prepare(
+    'SELECT COALESCE(seller_panel_enabled,1) as seller_panel_enabled FROM companies WHERE id=?'
+  ).bind(user.company_id).first<{seller_panel_enabled:number}>();
+  const sellerPanelEnabled = (coRow?.seller_panel_enabled ?? 1) !== 0;
+
+  // ── When seller panel is DISABLED → show Allocation/Inventory/Payment summary ──
+  if (isOwner && !sellerPanelEnabled) {
+    return renderOwnerSummaryReport(c, user, lang);
+  }
+
+  // ── Standard sales-based report (seller_panel_enabled = 1) ───────────────────
   const sellerFilter = !isOwner ? ` AND seller_id = ${user.id}` : '';
 
   const groupBy = c.req.query('group') ?? 'date';
@@ -364,6 +376,325 @@ reports.get('/', async (c) => {
 function getToday() { return new Date().toISOString().split('T')[0]; }
 function getWeekStart() { const d = new Date(); d.setDate(d.getDate()-d.getDay()); return d.toISOString().split('T')[0]; }
 function getMonthStart() { const d = new Date(); d.setDate(1); return d.toISOString().split('T')[0]; }
+
+// ============================================================
+// Owner Summary Report (seller_panel_enabled = 0)
+// Shows allocations, inventory, and payments — no sales rows
+// ============================================================
+async function renderOwnerSummaryReport(c: any, user: any, lang: any): Promise<Response> {
+  const from = c.req.query('from') ?? '';
+  const to   = c.req.query('to')   ?? '';
+  const dateLabel = from || to ? `${from || 'Start'} → ${to || 'Today'}` : 'All Time';
+
+  const allocDF = from ? ` AND date(ab.created_at) >= '${from}'` : '';
+  const allocDF2 = to ? ` AND date(ab.created_at) <= '${to}'` : '';
+  const invDF  = from ? ` AND date(ib.created_at) >= '${from}'` : '';
+  const invDF2 = to   ? ` AND date(ib.created_at) <= '${to}'`   : '';
+  const payDF  = from ? ` AND date(p.payment_date) >= '${from}'` : '';
+  const payDF2 = to   ? ` AND date(p.payment_date) <= '${to}'`   : '';
+
+  const [
+    allocTotals, allocBySeller, allocByBranch,
+    invTotals,   invByBranch,
+    payTotals,   payBySeller,
+    sellerBalances,
+  ] = await Promise.all([
+    // Allocation totals
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(total_gb),0) as gb, COALESCE(SUM(total_gross),0) as gross,
+             COALESCE(SUM(total_commission),0) as comm, COALESCE(SUM(total_net),0) as net,
+             COUNT(*) as batches
+      FROM allocation_batches ab WHERE ab.company_id=? ${allocDF}${allocDF2}`)
+      .bind(user.company_id).first<any>(),
+
+    // Allocation by seller
+    c.env.DB.prepare(`
+      SELECT u.full_name as seller_name,
+             COALESCE(SUM(ab.total_gb),0) as gb,
+             COALESCE(SUM(ab.total_gross),0) as gross,
+             COALESCE(SUM(ab.total_commission),0) as comm,
+             COALESCE(SUM(ab.total_net),0) as net,
+             COUNT(*) as batches
+      FROM allocation_batches ab
+      JOIN users u ON u.id = ab.seller_id
+      WHERE ab.company_id=? ${allocDF}${allocDF2}
+      GROUP BY ab.seller_id, u.full_name ORDER BY gb DESC`)
+      .bind(user.company_id).all<any>(),
+
+    // Allocation by branch
+    c.env.DB.prepare(`
+      SELECT b.name as branch_name,
+             COALESCE(SUM(ab.total_gb),0) as gb,
+             COALESCE(SUM(ab.total_gross),0) as gross,
+             COALESCE(SUM(ab.total_net),0) as net,
+             COUNT(*) as batches
+      FROM allocation_batches ab
+      JOIN branches b ON b.id = ab.branch_id
+      WHERE ab.company_id=? ${allocDF}${allocDF2}
+      GROUP BY ab.branch_id, b.name ORDER BY gb DESC`)
+      .bind(user.company_id).all<any>(),
+
+    // Inventory totals
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(total_gb),0) as gb, COALESCE(SUM(total_gross),0) as gross,
+             COUNT(*) as batches
+      FROM inventory_batches ib WHERE ib.company_id=? ${invDF}${invDF2}`)
+      .bind(user.company_id).first<any>(),
+
+    // Inventory by branch
+    c.env.DB.prepare(`
+      SELECT b.name as branch_name,
+             COALESCE(SUM(ib.total_gb),0) as gb,
+             COALESCE(SUM(ib.total_gross),0) as gross,
+             COUNT(*) as batches
+      FROM inventory_batches ib
+      JOIN branches b ON b.id = ib.branch_id
+      WHERE ib.company_id=? ${invDF}${invDF2}
+      GROUP BY ib.branch_id, b.name ORDER BY gb DESC`)
+      .bind(user.company_id).all<any>(),
+
+    // Payment totals by type
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(p.amount),0) as total, COUNT(*) as cnt
+      FROM payments p WHERE p.company_id=? ${payDF}${payDF2}`)
+      .bind(user.company_id).first<any>(),
+
+    // Payment by seller (balance summary)
+    c.env.DB.prepare(`
+      SELECT u.full_name as seller_name,
+             COALESCE(SUM(p.amount),0) as paid,
+             COUNT(*) as cnt
+      FROM payments p
+      JOIN users u ON u.id = p.seller_id
+      WHERE p.company_id=? ${payDF}${payDF2}
+      GROUP BY p.seller_id, u.full_name ORDER BY paid DESC`)
+      .bind(user.company_id).all<any>(),
+
+    // Seller balance: allocated gross vs total paid
+    c.env.DB.prepare(`
+      SELECT u.id, u.full_name,
+             COALESCE(SUM(ab.total_gross),0) as total_allocated_gross,
+             COALESCE(SUM(ab.total_commission),0) as total_commission,
+             COALESCE(SUM(ab.total_net),0) as total_net,
+             (SELECT COALESCE(SUM(amount),0) FROM payments pm WHERE pm.seller_id=u.id AND pm.company_id=u.company_id) as total_paid
+      FROM users u
+      LEFT JOIN allocation_batches ab ON ab.seller_id=u.id AND ab.company_id=u.company_id
+      WHERE u.company_id=? AND u.role='seller'
+      GROUP BY u.id, u.full_name ORDER BY total_net DESC`)
+      .bind(user.company_id).all<any>(),
+  ]);
+
+  // GB remaining = inventory GB stocked - allocation GB assigned
+  const gbRemaining = (invTotals?.gb ?? 0) - (allocTotals?.gb ?? 0);
+
+  // Build seller balance rows
+  const balanceRows = (sellerBalances.results || []).map((r: any) => {
+    const debt = (r.total_net ?? 0) - (r.total_paid ?? 0);
+    const debtColor = debt > 0 ? 'color:var(--warning)' : 'color:var(--success)';
+    return `<tr>
+      <td><strong>${r.full_name}</strong></td>
+      <td class="text-center">${formatGB(r.total_allocated_gross ?? 0)}</td>
+      <td class="text-center text-warning">${formatMoney(r.total_commission ?? 0)}</td>
+      <td class="text-center text-success">${formatMoney(r.total_net ?? 0)}</td>
+      <td class="text-center">${formatMoney(r.total_paid ?? 0)}</td>
+      <td class="text-center font-bold" style="${debtColor}">${debt > 0 ? '🔴' : '🟢'} ${formatMoney(Math.abs(debt))}${debt > 0 ? ' بدهکار' : ' تسویه'}</td>
+    </tr>`;
+  }).join('');
+
+  const allocBySellerRows = (allocBySeller.results || []).map((r: any) => `
+    <tr>
+      <td><strong>${r.seller_name}</strong></td>
+      <td class="text-center">${r.batches}</td>
+      <td class="text-primary font-bold">${formatGB(r.gb)}</td>
+      <td>${formatMoney(r.gross)}</td>
+      <td class="text-warning">${formatMoney(r.comm)}</td>
+      <td class="text-success font-bold">${formatMoney(r.net)}</td>
+    </tr>`).join('');
+
+  const allocByBranchRows = (allocByBranch.results || []).map((r: any) => `
+    <tr>
+      <td><strong>${r.branch_name}</strong></td>
+      <td class="text-center">${r.batches}</td>
+      <td class="text-primary font-bold">${formatGB(r.gb)}</td>
+      <td>${formatMoney(r.gross)}</td>
+      <td class="text-success font-bold">${formatMoney(r.net)}</td>
+    </tr>`).join('');
+
+  const invByBranchRows = (invByBranch.results || []).map((r: any) => `
+    <tr>
+      <td><strong>${r.branch_name}</strong></td>
+      <td class="text-center">${r.batches}</td>
+      <td class="text-primary font-bold">${formatGB(r.gb)}</td>
+      <td>${formatMoney(r.gross)}</td>
+    </tr>`).join('');
+
+  const payBySellerRows = (payBySeller.results || []).map((r: any) => `
+    <tr>
+      <td><strong>${r.seller_name}</strong></td>
+      <td class="text-center">${r.cnt}</td>
+      <td class="text-success font-bold">${formatMoney(r.paid)}</td>
+    </tr>`).join('');
+
+  return c.html(pageShell({
+    title: t(lang, 'reports'), lang, user, activePage: 'reports',
+    extraHead: `<style>
+    @media print {
+      .sidebar,.topbar,.filter-bar,.btn-group,.page-header .btn,
+      .notif-bell-wrap,.lang-switcher,.lang-switcher-mobile { display:none!important }
+      .app-layout { display:block!important }
+      .main-content { margin:0!important; padding:0!important }
+      body { background:#fff!important; color:#000!important }
+      .card { border:1px solid #ccc!important; background:#fff!important }
+      table { width:100%; border-collapse:collapse }
+      th,td { border:1px solid #ccc!important; padding:4pt 6pt!important }
+    }
+    </style>`,
+    body: `
+    <div class="page-header">
+      <div>
+        <div class="page-title">📋 ${t(lang,'reports')}</div>
+        <div class="page-subtitle">${dateLabel}</div>
+      </div>
+      <div class="btn-group">
+        <button onclick="window.print()" class="btn btn-primary">🖨️ Print / PDF</button>
+      </div>
+    </div>
+
+    <!-- Date Filter -->
+    <form method="GET" action="/reports" class="filter-bar" style="flex-wrap:wrap;gap:.75rem;margin-bottom:1.5rem">
+      <div class="form-group" style="min-width:130px">
+        <label>${t(lang,'from_date')}</label>
+        <input type="date" name="from" value="${from}"/>
+      </div>
+      <div class="form-group" style="min-width:130px">
+        <label>${t(lang,'to_date')}</label>
+        <input type="date" name="to" value="${to}"/>
+      </div>
+      <div style="display:flex;gap:.4rem;align-self:flex-end;flex-wrap:wrap">
+        <button type="submit" class="btn btn-primary">${t(lang,'generate_report')}</button>
+        <a href="?from=${getWeekStart()}&to=${getToday()}" class="btn btn-outline btn-sm">این هفته</a>
+        <a href="?from=${getMonthStart()}&to=${getToday()}" class="btn btn-outline btn-sm">این ماه</a>
+        <a href="/reports" class="btn btn-ghost btn-sm">همه</a>
+      </div>
+    </form>
+
+    <!-- KPI Grid -->
+    <div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));margin-bottom:1.5rem">
+      <div class="stat-card">
+        <div class="stat-card-accent" style="background:#7c3aed"></div>
+        <div class="stat-label">GB تخصیص‌یافته</div>
+        <div class="stat-value" style="color:#7c3aed">${formatGB(allocTotals?.gb??0)}</div>
+        <div class="stat-sub">${allocTotals?.batches??0} تخصیص</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-accent" style="background:var(--info)"></div>
+        <div class="stat-label">GB موجودی خریداری‌شده</div>
+        <div class="stat-value" style="color:var(--info)">${formatGB(invTotals?.gb??0)}</div>
+        <div class="stat-sub">${invTotals?.batches??0} ورودی</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-accent" style="background:${gbRemaining >= 0 ? 'var(--success)' : 'var(--danger)'}"></div>
+        <div class="stat-label">GB مانده موجودی</div>
+        <div class="stat-value" style="color:${gbRemaining >= 0 ? 'var(--success)' : 'var(--danger)'}">${formatGB(Math.abs(gbRemaining))}</div>
+        <div class="stat-sub">${gbRemaining < 0 ? '⚠️ کسری' : 'موجود'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-accent" style="background:var(--warning)"></div>
+        <div class="stat-label">کل کمیسیون تخصیص</div>
+        <div class="stat-value warning">${formatMoney(allocTotals?.comm??0)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-accent" style="background:var(--success)"></div>
+        <div class="stat-label">خالص تخصیص (برای owner)</div>
+        <div class="stat-value success">${formatMoney(allocTotals?.net??0)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-accent" style="background:var(--primary)"></div>
+        <div class="stat-label">کل دریافتی از فروشندگان</div>
+        <div class="stat-value primary">${formatMoney(payTotals?.total??0)}</div>
+        <div class="stat-sub">${payTotals?.cnt??0} پرداخت</div>
+      </div>
+    </div>
+
+    <!-- Seller Balance Table -->
+    <div class="card" style="margin-bottom:1.5rem">
+      <div class="card-header">
+        <div class="card-title">👤 مانده‌حساب فروشندگان</div>
+        <div style="font-size:.78rem;color:var(--text-muted)">مجموع تخصیص خالص منهای پرداختی‌ها</div>
+      </div>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>فروشنده</th>
+            <th class="text-center">ارزش تخصیص (ناخالص)</th>
+            <th class="text-center">کمیسیون</th>
+            <th class="text-center">خالص قابل دریافت</th>
+            <th class="text-center">پرداخت‌شده</th>
+            <th class="text-center">مانده / وضعیت</th>
+          </tr></thead>
+          <tbody>${balanceRows || `<tr><td colspan="6"><div class="empty-state"><h3>${t(lang,'no_data')}</h3></div></td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Allocations by Seller -->
+    <div class="card" style="margin-bottom:1.5rem">
+      <div class="card-header"><div class="card-title">📦 تخصیص‌ها بر اساس فروشنده</div></div>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>فروشنده</th><th class="text-center">تعداد</th>
+            <th>${t(lang,'total_gb')}</th><th>${t(lang,'gross_amount')}</th>
+            <th>${t(lang,'commission_amount')}</th><th>${t(lang,'net_amount')}</th>
+          </tr></thead>
+          <tbody>${allocBySellerRows || `<tr><td colspan="6" class="text-center">${t(lang,'no_data')}</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Allocations by Branch -->
+    <div class="card" style="margin-bottom:1.5rem">
+      <div class="card-header"><div class="card-title">🏢 تخصیص‌ها بر اساس شعبه</div></div>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>شعبه</th><th class="text-center">تعداد</th>
+            <th>${t(lang,'total_gb')}</th><th>${t(lang,'gross_amount')}</th><th>${t(lang,'net_amount')}</th>
+          </tr></thead>
+          <tbody>${allocByBranchRows || `<tr><td colspan="5" class="text-center">${t(lang,'no_data')}</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Inventory by Branch -->
+    <div class="card" style="margin-bottom:1.5rem">
+      <div class="card-header"><div class="card-title">📥 موجودی خریداری‌شده بر اساس شعبه</div></div>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>شعبه</th><th class="text-center">تعداد ورودی</th>
+            <th>${t(lang,'total_gb')}</th><th>هزینه خرید</th>
+          </tr></thead>
+          <tbody>${invByBranchRows || `<tr><td colspan="4" class="text-center">${t(lang,'no_data')}</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Payments by Seller -->
+    <div class="card" style="margin-bottom:1.5rem">
+      <div class="card-header"><div class="card-title">💳 پرداختی‌های دریافتی از فروشندگان</div></div>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>فروشنده</th><th class="text-center">تعداد</th><th>جمع پرداختی</th>
+          </tr></thead>
+          <tbody>${payBySellerRows || `<tr><td colspan="3" class="text-center">${t(lang,'no_data')}</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>
+    `
+  }));
+}
 
 // ============================================================
 // PDF Report Page  GET /reports/pdf

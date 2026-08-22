@@ -34,9 +34,10 @@ export function pageShell(opts: {
     <a href="/allocations" class="nav-link ${activePage === 'allocations' ? 'active' : ''}">
       <i class="icon-share"></i><span>${t(lang, 'allocations')}</span>
     </a>
+    ${sellerPanelEnabled ? `
     <a href="/sales" class="nav-link ${activePage === 'sales' ? 'active' : ''}">
       <i class="icon-dollar"></i><span>${t(lang, 'sales')}</span>
-    </a>
+    </a>` : ''}
     ${showSellerLinks ? `
     <a href="/payments" class="nav-link ${activePage === 'payments' ? 'active' : ''}">
       <i class="icon-card"></i><span>${t(lang, 'payments')}</span>
