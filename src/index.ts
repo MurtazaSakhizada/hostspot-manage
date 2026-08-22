@@ -199,10 +199,50 @@ app.delete('/api/packages/:id', async (c) => {
 
 app.delete('/api/users/:id', async (c) => {
   const user = c.get('user');
-  if (user.role !== 'owner') return c.json({error:'Forbidden'},403);
-  const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM users WHERE id=? AND company_id=? AND id != ?').bind(id, user.company_id, user.id).run();
-  return c.json({success:true});
+  if (!user || user.role !== 'owner') return c.json({error:'Forbidden'},403);
+  const id = parseInt(c.req.param('id'));
+  if (isNaN(id)) return c.json({error:'Invalid id'},400);
+  if (id === user.id) return c.json({error:'Cannot delete yourself'},400);
+  try {
+    const db = c.env.DB;
+    // Verify target user belongs to same company
+    const target = await db.prepare('SELECT id FROM users WHERE id=? AND company_id=?')
+      .bind(id, user.company_id).first<{id:number}>();
+    if (!target) return c.json({error:'User not found'},404);
+    // Check if user has any financial records (sales or payments) — these are NOT NULL FKs
+    const hasSales = await db.prepare('SELECT 1 FROM sales WHERE seller_id=? AND company_id=? LIMIT 1')
+      .bind(id, user.company_id).first();
+    const hasPayments = await db.prepare('SELECT 1 FROM payments WHERE seller_id=? AND company_id=? LIMIT 1')
+      .bind(id, user.company_id).first();
+    if (hasSales || hasPayments) {
+      // Has financial history — deactivate instead of hard delete to preserve records
+      await db.prepare('UPDATE users SET active=0 WHERE id=? AND company_id=?').bind(id, user.company_id).run();
+      await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
+      return c.json({success:true, deactivated:true});
+    }
+    // No financial records — safe to fully delete
+    // 1. Delete sessions
+    await db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
+    // 2. Delete notifications
+    try { await db.prepare('DELETE FROM notifications WHERE user_id=?').bind(id).run(); } catch(_){}
+    // 3. Delete allocations
+    await db.prepare('DELETE FROM allocations WHERE seller_id=? AND company_id=?').bind(id, user.company_id).run();
+    // 4. NULL-out nullable FKs
+    try { await db.prepare('UPDATE inventory SET seller_id=NULL WHERE seller_id=? AND company_id=?').bind(id, user.company_id).run(); } catch(_){}
+    try { await db.prepare('UPDATE batch_history SET seller_id=NULL WHERE seller_id=? AND company_id=?').bind(id, user.company_id).run(); } catch(_){}
+    try { await db.prepare('UPDATE expenses SET seller_id=NULL WHERE seller_id=? AND company_id=?').bind(id, user.company_id).run(); } catch(_){}
+    try { await db.prepare('UPDATE expenses SET created_by=NULL WHERE created_by=? AND company_id=?').bind(id, user.company_id).run(); } catch(_){}
+    try { await db.prepare('UPDATE financial_ledger SET seller_id=NULL WHERE seller_id=? AND company_id=?').bind(id, user.company_id).run(); } catch(_){}
+    try { await db.prepare('UPDATE financial_ledger SET created_by=NULL WHERE created_by=? AND company_id=?').bind(id, user.company_id).run(); } catch(_){}
+    try { await db.prepare('UPDATE payment_edit_requests SET seller_id=NULL WHERE seller_id=? AND company_id=?').bind(id, user.company_id).run(); } catch(_){}
+    try { await db.prepare('UPDATE payment_edit_requests SET reviewed_by=NULL WHERE reviewed_by=? AND company_id=?').bind(id, user.company_id).run(); } catch(_){}
+    // 5. Finally delete the user
+    await db.prepare('DELETE FROM users WHERE id=? AND company_id=?').bind(id, user.company_id).run();
+    return c.json({success:true, deactivated:false});
+  } catch(e: any) {
+    console.error('DELETE /api/users/:id error:', e);
+    return c.json({error: e?.message ?? 'Delete failed'}, 500);
+  }
 });
 
 // ---- Language API (no auth required) ----

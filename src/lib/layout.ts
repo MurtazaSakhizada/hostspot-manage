@@ -234,8 +234,13 @@ function showToast(msg, type='success') {
 function confirmDelete(url, msg) {
   if (confirm(msg || 'Are you sure?')) {
     fetch(url, {method:'DELETE', credentials:'include'}).then(r => r.json()).then(d => {
-      if(d.success) { showToast('Deleted'); setTimeout(()=>location.reload(),500); }
-      else showToast(d.error||'Error','error');
+      if(d.success) {
+        const label = d.deactivated ? 'Deactivated (has financial records)' : 'Deleted';
+        showToast(label);
+        setTimeout(()=>location.reload(),600);
+      } else {
+        showToast(d.error||'Error','error');
+      }
     }).catch(e => showToast('Error: ' + e.message, 'error'));
   }
 }
