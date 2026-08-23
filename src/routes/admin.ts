@@ -323,9 +323,8 @@ admin.get('/users', async (c) => {
       <td>${u.sale_count}</td>
       <td><span class="badge badge-${u.active?'success':'danger'}">${t(lang,u.active?'active':'inactive')}</span></td>
       <td>
-        ${u.id !== user.id ? `
         <button onclick="editUser(${u.id},'${u.full_name.replace(/'/g,"\\'")}','${u.username}','${u.role}',${u.commission_rate},'${u.language}',${u.active},${u.branch_id||0})" class="btn btn-outline btn-sm">${t(lang,'edit')}</button>
-        <button onclick="confirmDelete('/api/users/${u.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>` : '<span class="text-gray text-xs">Current user</span>'}
+        ${u.id !== user.id ? `<button onclick="confirmDelete('/api/users/${u.id}','${t(lang,'confirm_delete')}')" class="btn btn-danger btn-sm">${t(lang,'delete')}</button>` : ''}
       </td>
     </tr>`;
   }).join('');
