@@ -60,6 +60,9 @@ export function pageShell(opts: {
     </a>
 
     ${isOwner ? `
+    <a href="/pppoe" class="nav-link ${activePage === 'pppoe' ? 'active' : ''}">
+      <i class="icon-ledger">🌐</i><span>مشتریان PPPoE</span>
+    </a>
     <div style="margin:.5rem 1rem .25rem;font-size:.65rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);font-weight:600">
       ${t(lang, 'management')}
     </div>

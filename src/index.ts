@@ -22,6 +22,7 @@ import notificationsRoutes from './routes/notifications';
 import expensesRoutes from './routes/expenses';
 import ledgerRoutes from './routes/ledger';
 import mobileRoutes from './routes/mobile';
+import pppoeRoutes from './routes/pppoe';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -111,6 +112,7 @@ app.route('/notifications', notificationsRoutes);
 app.route('/expenses', expensesRoutes);
 app.route('/ledger', ledgerRoutes);
 app.route('/mobile', mobileRoutes);
+app.route('/pppoe', pppoeRoutes);
 app.route('/', adminRoutes);
 
 // ---- API: Delete endpoints (re-mount under app root) ----
