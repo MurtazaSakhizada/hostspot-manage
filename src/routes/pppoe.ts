@@ -231,7 +231,7 @@ pppoe.get('/', async (c) => {
     binds.push(parseInt(branchFilter));
   }
 
-  const [customers, branches, summary] = await Promise.all([
+  const [customers, branches, summary, financials] = await Promise.all([
     c.env.DB.prepare(`
       SELECT pc.*, b.name as branch_name
       FROM pppoe_customers pc
@@ -248,10 +248,16 @@ pppoe.get('/', async (c) => {
         COUNT(*) as total,
         SUM(CASE WHEN status='active' AND date(expiry_date) >= date('now') THEN 1 ELSE 0 END) as active_count,
         SUM(CASE WHEN status='active' AND date(expiry_date) < date('now')  THEN 1 ELSE 0 END) as expired_count,
-        SUM(CASE WHEN status='active' AND date(expiry_date) BETWEEN date('now') AND date('now','+7 days') THEN 1 ELSE 0 END) as expiring_soon,
-        COALESCE(SUM(monthly_price),0) as total_monthly_revenue
+        SUM(CASE WHEN status='active' AND date(expiry_date) BETWEEN date('now') AND date('now','+7 days') THEN 1 ELSE 0 END) as expiring_soon
       FROM pppoe_customers WHERE company_id=?`)
       .bind(user.company_id).first<any>(),
+
+    // Financial totals from actual tables (not snapshots)
+    c.env.DB.prepare(`
+      SELECT
+        (SELECT COALESCE(SUM(monthly_price),0) FROM pppoe_renewals  WHERE company_id=?) as billed_total,
+        (SELECT COALESCE(SUM(amount),0)         FROM pppoe_payments  WHERE company_id=?) as paid_total
+    `).bind(user.company_id, user.company_id).first<{billed_total:number; paid_total:number}>(),
   ]);
 
   const branchSelectOpts = (branches.results || []).map((b: any) =>
@@ -307,8 +313,8 @@ pppoe.get('/', async (c) => {
       <a href="/pppoe/add" class="btn btn-primary">+ افزودن مشتری</a>
     </div>
 
-    <!-- KPI Cards -->
-    <div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(140px,1fr));margin-bottom:1.25rem">
+    <!-- KPI Cards — Status -->
+    <div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(140px,1fr));margin-bottom:.75rem">
       <div class="stat-card">
         <div class="stat-card-accent" style="background:var(--success)"></div>
         <div class="stat-label">فعال</div>
@@ -324,10 +330,27 @@ pppoe.get('/', async (c) => {
         <div class="stat-label">منقضی‌شده</div>
         <div class="stat-value" style="color:var(--danger)">${summary?.expired_count ?? 0}</div>
       </div>
+    </div>
+
+    <!-- KPI Cards — Financial -->
+    <div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));margin-bottom:1.25rem">
       <div class="stat-card">
         <div class="stat-card-accent" style="background:var(--primary)"></div>
-        <div class="stat-label">درآمد ماهانه (کل)</div>
-        <div class="stat-value primary">${formatMoney(summary?.total_monthly_revenue ?? 0)}</div>
+        <div class="stat-label">درآمد کلی (صورت‌حساب)</div>
+        <div class="stat-value primary">${formatMoney(financials?.billed_total ?? 0)}</div>
+        <div style="font-size:.7rem;color:var(--text-muted);margin-top:.2rem">مجموع تمدیدهای ثبت‌شده</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-accent" style="background:var(--success)"></div>
+        <div class="stat-label">دریافتی واقعی</div>
+        <div class="stat-value success">${formatMoney(financials?.paid_total ?? 0)}</div>
+        <div style="font-size:.7rem;color:var(--text-muted);margin-top:.2rem">پرداخت‌های وصول‌شده</div>
+      </div>
+      <div class="stat-card" style="cursor:pointer" onclick="location.href='/pppoe/settlements'">
+        <div class="stat-card-accent" style="background:var(--danger)"></div>
+        <div class="stat-label">مانده کل (بدهی)</div>
+        <div class="stat-value" style="color:${((financials?.billed_total??0)-(financials?.paid_total??0))>0?'var(--danger)':'var(--success)'}">${formatMoney((financials?.billed_total ?? 0) - (financials?.paid_total ?? 0))}</div>
+        <div style="font-size:.7rem;color:var(--primary);margin-top:.2rem">↗ مشاهده تسویه‌حساب</div>
       </div>
     </div>
 
@@ -571,6 +594,269 @@ pppoe.get('/', async (c) => {
 });
 
 // ============================================================
+// GET /pppoe/settlements — Settlement page (owner only)
+// Lists customers with outstanding balance (billed > paid), sorted by debt desc
+// ============================================================
+pppoe.get('/settlements', async (c) => {
+  const user = c.get('user');
+  const lang = c.get('lang');
+
+  // Per-customer debt: billed (from renewals) minus paid (from pppoe_payments)
+  let debtors: any[] = [];
+  let totals = { billed: 0, paid: 0, balance: 0 };
+  try {
+    const result = await c.env.DB.prepare(`
+      SELECT
+        pc.id,
+        pc.full_name,
+        pc.pppoe_username,
+        pc.phone_primary,
+        pc.monthly_price,
+        pc.expiry_date,
+        pc.status,
+        COALESCE(r.billed, 0) as billed,
+        COALESCE(p.paid,   0) as paid,
+        COALESCE(r.billed, 0) - COALESCE(p.paid, 0) as balance
+      FROM pppoe_customers pc
+      LEFT JOIN (
+        SELECT customer_id, SUM(monthly_price) as billed
+        FROM pppoe_renewals
+        WHERE company_id=?
+        GROUP BY customer_id
+      ) r ON r.customer_id = pc.id
+      LEFT JOIN (
+        SELECT customer_id, SUM(amount) as paid
+        FROM pppoe_payments
+        WHERE company_id=?
+        GROUP BY customer_id
+      ) p ON p.customer_id = pc.id
+      WHERE pc.company_id=?
+        AND (COALESCE(r.billed, 0) - COALESCE(p.paid, 0)) > 0
+      ORDER BY balance DESC
+    `).bind(user.company_id, user.company_id, user.company_id).all<any>();
+
+    debtors = result.results ?? [];
+
+    // Also grab company-wide totals for the summary row
+    const totRow = await c.env.DB.prepare(`
+      SELECT
+        (SELECT COALESCE(SUM(monthly_price),0) FROM pppoe_renewals WHERE company_id=?) as billed,
+        (SELECT COALESCE(SUM(amount),0)         FROM pppoe_payments WHERE company_id=?) as paid
+    `).bind(user.company_id, user.company_id).first<{billed:number; paid:number}>();
+    totals = {
+      billed:  totRow?.billed  ?? 0,
+      paid:    totRow?.paid    ?? 0,
+      balance: (totRow?.billed ?? 0) - (totRow?.paid ?? 0),
+    };
+  } catch(e: any) {
+    return c.html(`<html><body style="font-family:sans-serif;padding:2rem"><h2>DB Error</h2><pre>${e?.message}</pre><a href="/pppoe">← back</a></body></html>`, 500);
+  }
+
+  const rows = debtors.map((d: any) => `
+    <tr>
+      <td>
+        <a href="/pppoe/${d.id}" style="font-weight:600;color:var(--primary);text-decoration:none"
+          onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${d.full_name}</a>
+        <div style="font-size:.75rem;color:var(--text-muted)">${d.pppoe_username}</div>
+      </td>
+      <td>${d.phone_primary}</td>
+      <td style="color:var(--primary);font-weight:600">${formatMoney(d.billed)}</td>
+      <td style="color:var(--success);font-weight:600">${formatMoney(d.paid)}</td>
+      <td style="color:var(--danger);font-weight:700;font-size:1rem">${formatMoney(d.balance)}</td>
+      <td>
+        <button onclick="quickSettle(${d.id},'${d.full_name.replace(/'/g,"\\'")}',${d.balance})"
+          class="btn btn-sm" style="background:var(--success);color:#fff">💵 تسویه سریع</button>
+      </td>
+    </tr>`).join('');
+
+  return c.html(pageShell({
+    title: 'تسویه‌حساب PPPoE', lang, user, activePage: 'pppoe',
+    body: `
+    <!-- Breadcrumb -->
+    <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:1rem">
+      <a href="/pppoe" style="color:var(--primary);text-decoration:none">🌐 مشتریان PPPoE</a>
+      <span style="margin:0 .4rem">›</span>
+      <span>تسویه‌حساب</span>
+    </div>
+
+    <div class="page-header">
+      <div>
+        <div class="page-title">💰 تسویه‌حساب مشتریان</div>
+        <div class="page-subtitle">مشتریانی که مانده بدهی دارند</div>
+      </div>
+      <a href="/pppoe" class="btn btn-outline">← بازگشت</a>
+    </div>
+
+    <!-- Summary KPIs -->
+    <div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr));margin-bottom:1.25rem">
+      <div class="stat-card">
+        <div class="stat-card-accent" style="background:var(--primary)"></div>
+        <div class="stat-label">کل صورت‌حساب</div>
+        <div class="stat-value primary">${formatMoney(totals.billed)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-accent" style="background:var(--success)"></div>
+        <div class="stat-label">دریافت‌شده</div>
+        <div class="stat-value success">${formatMoney(totals.paid)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-accent" style="background:var(--danger)"></div>
+        <div class="stat-label">مانده کل</div>
+        <div class="stat-value" style="color:var(--danger)">${formatMoney(totals.balance)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-accent" style="background:var(--warning)"></div>
+        <div class="stat-label">تعداد بدهکاران</div>
+        <div class="stat-value warning">${debtors.length}</div>
+      </div>
+    </div>
+
+    ${debtors.length === 0 ? `
+    <div class="card" style="padding:3rem;text-align:center">
+      <div style="font-size:3rem;margin-bottom:.75rem">✅</div>
+      <h3 style="margin-bottom:.5rem">همه حساب‌ها تسویه است</h3>
+      <p style="color:var(--text-muted);font-size:.9rem">هیچ مشتری‌ای مانده‌حساب بدهکار ندارد</p>
+    </div>` : `
+    <div class="card">
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>مشتری</th>
+            <th>تماس</th>
+            <th>صورت‌حساب</th>
+            <th>پرداخت‌شده</th>
+            <th>مانده (بدهی)</th>
+            <th>عملیات</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`}
+
+    <!-- Confirm settle modal -->
+    <div class="modal-overlay" id="settle-modal">
+      <div class="modal" style="max-width:420px">
+        <div class="modal-header">
+          <div class="modal-title">💵 تسویه سریع</div>
+          <button class="modal-close" onclick="closeSettle()">✕</button>
+        </div>
+        <div style="padding:1.25rem">
+          <p style="margin-bottom:1rem">
+            تسویه حساب <strong id="settle-name"></strong> به مبلغ
+            <strong id="settle-amount" style="color:var(--danger)"></strong> افغانی ثبت شود؟
+          </p>
+          <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:1.25rem">
+            این مبلغ به عنوان پرداخت کامل در سیستم ثبت می‌شود و مانده‌حساب صفر خواهد شد.
+          </p>
+          <form method="POST" id="settle-form">
+            <div class="modal-footer" style="border:none;padding:0">
+              <button type="button" onclick="closeSettle()" class="btn btn-outline">انصراف</button>
+              <button type="submit" class="btn btn-primary" style="background:var(--success)">✅ تأیید و ثبت</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>`,
+
+    scripts: `<script>
+    function quickSettle(id, name, balance) {
+      document.getElementById('settle-name').textContent = name;
+      document.getElementById('settle-amount').textContent = balance.toLocaleString('fa-IR');
+      document.getElementById('settle-form').action = '/pppoe/settle/' + id;
+      document.getElementById('settle-modal').classList.add('open');
+    }
+    function closeSettle() {
+      document.getElementById('settle-modal').classList.remove('open');
+    }
+    const _sp = new URLSearchParams(location.search);
+    if (_sp.get('settled') === '1') {
+      const b = document.createElement('div');
+      b.style.cssText = 'position:fixed;top:1rem;left:50%;transform:translateX(-50%);background:var(--success);color:#fff;padding:.65rem 1.4rem;border-radius:10px;font-size:.9rem;z-index:9999;box-shadow:0 4px 15px rgba(0,0,0,.2)';
+      b.textContent = '✅ تسویه با موفقیت ثبت شد';
+      document.body.appendChild(b);
+      setTimeout(() => b.remove(), 3500);
+      history.replaceState(null, '', location.pathname);
+    }
+    </script>`
+  }));
+});
+
+// ============================================================
+// POST /pppoe/settle/:id — Quick-settle: insert pppoe_payment + ledger entry
+// amount = full outstanding balance (billed - paid)
+// ============================================================
+pppoe.post('/settle/:id', async (c) => {
+  const user = c.get('user');
+  const id = parseInt(c.req.param('id'));
+  if (isNaN(id)) return c.redirect('/pppoe/settlements');
+
+  // Verify customer belongs to this company and compute current balance
+  let balance = 0;
+  try {
+    const balRow = await c.env.DB.prepare(`
+      SELECT
+        COALESCE(r.billed, 0) - COALESCE(p.paid, 0) as balance
+      FROM pppoe_customers pc
+      LEFT JOIN (SELECT customer_id, SUM(monthly_price) as billed FROM pppoe_renewals WHERE company_id=? GROUP BY customer_id) r
+        ON r.customer_id = pc.id
+      LEFT JOIN (SELECT customer_id, SUM(amount) as paid FROM pppoe_payments WHERE company_id=? GROUP BY customer_id) p
+        ON p.customer_id = pc.id
+      WHERE pc.id=? AND pc.company_id=?
+    `).bind(user.company_id, user.company_id, id, user.company_id).first<{balance:number}>();
+
+    if (!balRow) return c.redirect('/pppoe/settlements');
+    balance = balRow.balance ?? 0;
+  } catch(e: any) {
+    console.error('PPPoE settle balance error:', e);
+    return c.redirect('/pppoe/settlements');
+  }
+
+  // Nothing to settle
+  if (balance <= 0) return c.redirect('/pppoe/settlements');
+
+  // Insert pppoe_payment + financial_ledger atomically
+  try {
+    // Get current ledger balance for this owner (seller_id = owner's user id)
+    const ledgerRow = await c.env.DB.prepare(`
+      SELECT COALESCE(SUM(money_amount), 0) as running_balance
+      FROM financial_ledger
+      WHERE company_id=? AND seller_id=?
+    `).bind(user.company_id, user.id).first<{running_balance:number}>();
+    const currentLedgerBalance = ledgerRow?.running_balance ?? 0;
+    const newBalanceAfter = currentLedgerBalance - balance; // payment reduces debt
+
+    await c.env.DB.batch([
+      // 1. Record the payment in pppoe_payments
+      c.env.DB.prepare(`
+        INSERT INTO pppoe_payments (customer_id, company_id, amount, notes, recorded_by)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(id, user.company_id, balance, 'تسویه سریع', user.id),
+
+      // 2. Record in financial_ledger (payment = negative money_amount = reduces debt)
+      c.env.DB.prepare(`
+        INSERT INTO financial_ledger
+          (company_id, seller_id, transaction_type, ref_type, ref_id,
+           gb_amount, money_amount, balance_after, notes, created_by)
+        VALUES (?, ?, 'payment', 'pppoe_payment', ?, 0, ?, ?, ?, ?)
+      `).bind(
+        user.company_id,
+        user.id,          // owner acts as seller_id for PPPoE payments
+        id,               // ref_id = pppoe_customer id (will point to new pppoe_payment after insert, close enough)
+        -balance,         // negative = payment reduces ledger balance
+        newBalanceAfter,
+        'تسویه سریع مشتری PPPoE',
+        user.id
+      ),
+    ]);
+  } catch(e: any) {
+    console.error('PPPoE settle error:', e);
+    return c.redirect('/pppoe/settlements');
+  }
+
+  return c.redirect('/pppoe/settlements?settled=1');
+});
+
+// ============================================================
 // GET /pppoe/add — Add Customer Form
 // ============================================================
 pppoe.get('/add', async (c) => {
@@ -643,7 +929,10 @@ pppoe.get('/:id', async (c) => {
   const id = parseInt(c.req.param('id'));
   if (isNaN(id)) return c.redirect('/pppoe');
 
-  const [customer, renewals] = await Promise.all([
+  // ── Fetch customer + renewals + total paid ───────────────
+  let customer: any, renewals: any, totalPaid = 0;
+  try {
+  const results = await Promise.all([
     c.env.DB.prepare(`
       SELECT pc.*, b.name as branch_name
       FROM pppoe_customers pc
@@ -659,7 +948,18 @@ pppoe.get('/:id', async (c) => {
       ORDER BY pr.renewed_at DESC
       LIMIT 50`)
       .bind(id).all<any>(),
+
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(monthly_price),0) as total
+      FROM pppoe_renewals WHERE customer_id=?`)
+      .bind(id).first<{total:number}>(),
   ]);
+  customer  = results[0];
+  renewals  = results[1];
+  totalPaid = results[2]?.total ?? 0;
+  } catch(e: any) {
+    return c.html(`<html><body style="font-family:sans-serif;padding:2rem"><h2>DB Error</h2><pre>${e?.message}</pre><a href="/pppoe">← back</a></body></html>`, 500);
+  }
 
   if (!customer) return c.redirect('/pppoe');
 
@@ -746,7 +1046,14 @@ pppoe.get('/:id', async (c) => {
         <div style="font-size:.72rem;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:.6rem">📅 انقضا</div>
         <div style="font-size:.95rem;font-weight:600;color:${expired ? 'var(--danger)' : diff <= 7 ? 'var(--warning)' : 'var(--text)'}"> ${customer.expiry_date}</div>
         <div style="margin-top:.3rem">${daysLeft(customer.expiry_date)}</div>
-        ${customer.last_renewed_at ? `<div style="font-size:.72rem;color:var(--text-muted);margin-top:.25rem">آخرین تمدید: ${customer.last_renewed_at.split('T')[0]}</div>` : ''}
+        ${customer.last_renewed_at ? `<div style="font-size:.72rem;color:var(--text-muted);margin-top:.25rem">آخرین تمدید: ${customer.last_renewed_at.split('T')[0].split(' ')[0]}</div>` : ''}
+      </div>
+
+      <!-- Total paid -->
+      <div class="card" style="padding:1rem">
+        <div style="font-size:.72rem;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:.6rem">💵 مجموع پرداختی</div>
+        <div style="font-size:1.1rem;font-weight:700;color:var(--primary)">${formatMoney(totalPaid)}</div>
+        <div style="font-size:.78rem;color:var(--text-muted);margin-top:.2rem">از ${renewals.results?.length ?? 0} تمدید</div>
       </div>
 
     </div>
