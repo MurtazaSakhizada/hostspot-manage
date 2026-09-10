@@ -447,7 +447,7 @@ pppoe.get('/', async (c) => {
         '<div style="text-align:center;color:var(--text-muted);padding:2rem">در حال بارگذاری...</div>';
       document.getElementById('history-modal').classList.add('open');
 
-      fetch('/api/pppoe/' + id + '/renewals')
+      fetch('/pppoe/' + id + '/renewals')
         .then(r => r.json())
         .then(data => {
           const rows = data.renewals;
@@ -763,13 +763,22 @@ pppoe.get('/:id', async (c) => {
       d.setMonth(d.getMonth() + months);
       document.getElementById('renew-d-new-expiry').value = d.toISOString().split('T')[0];
     }
-    // Auto-open renew modal if redirected back with ?renewed=1
-    if (new URLSearchParams(location.search).get('renewed') === '1') {
+    // Auto-show banners for redirect results
+    const _params = new URLSearchParams(location.search);
+    if (_params.get('renewed') === '1') {
       const banner = document.createElement('div');
       banner.style.cssText = 'position:fixed;top:1rem;left:50%;transform:translateX(-50%);background:var(--success);color:#fff;padding:.65rem 1.4rem;border-radius:10px;font-size:.9rem;z-index:9999;box-shadow:0 4px 15px rgba(0,0,0,.2)';
       banner.textContent = '✅ تمدید با موفقیت ثبت شد';
       document.body.appendChild(banner);
       setTimeout(() => banner.remove(), 3500);
+      history.replaceState(null, '', location.pathname);
+    }
+    if (_params.get('renew_error') === '1') {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'position:fixed;top:1rem;left:50%;transform:translateX(-50%);background:var(--danger);color:#fff;padding:.65rem 1.4rem;border-radius:10px;font-size:.9rem;z-index:9999;box-shadow:0 4px 15px rgba(0,0,0,.2)';
+      banner.textContent = '❌ خطا در ثبت تمدید — لطفاً دوباره تلاش کنید';
+      document.body.appendChild(banner);
+      setTimeout(() => banner.remove(), 5000);
       history.replaceState(null, '', location.pathname);
     }
     </script>`
@@ -877,29 +886,36 @@ pppoe.post('/:id/renew', async (c) => {
   const renew_notes = form.get('renew_notes')?.toString().trim() || null;
 
   // Run both writes in batch for atomicity
-  await c.env.DB.batch([
-    c.env.DB.prepare(`
-      UPDATE pppoe_customers
-      SET expiry_date=?, last_renewed_at=datetime('now'), status='active'
-      WHERE id=? AND company_id=?`)
-      .bind(new_expiry, id, user.company_id),
+  try {
+    await c.env.DB.batch([
+      c.env.DB.prepare(`
+        UPDATE pppoe_customers
+        SET expiry_date=?, last_renewed_at=datetime('now'), status='active'
+        WHERE id=? AND company_id=?`)
+        .bind(new_expiry, id, user.company_id),
 
-    c.env.DB.prepare(`
-      INSERT INTO pppoe_renewals
-        (customer_id, company_id, previous_expiry, new_expiry, monthly_price, notes, renewed_by)
-      VALUES (?,?,?,?,?,?,?)`)
-      .bind(id, user.company_id, oldCustomer.expiry_date, new_expiry,
-            oldCustomer.monthly_price, renew_notes, user.id),
-  ]);
+      c.env.DB.prepare(`
+        INSERT INTO pppoe_renewals
+          (customer_id, company_id, previous_expiry, new_expiry, monthly_price, notes, renewed_by)
+        VALUES (?,?,?,?,?,?,?)`)
+        .bind(id, user.company_id, oldCustomer.expiry_date, new_expiry,
+              oldCustomer.monthly_price, renew_notes, user.id),
+    ]);
+  } catch (e: any) {
+    console.error('PPPoE renew error:', e);
+    // Redirect back with error flag instead of crashing to 500 HTML
+    return c.redirect(`/pppoe/${id}?renew_error=1`);
+  }
 
   // Redirect back to detail page with success flag
   return c.redirect(`/pppoe/${id}?renewed=1`);
 });
 
 // ============================================================
-// GET /api/pppoe/:id/renewals — JSON renewal history for modal
+// GET /pppoe/:id/renewals — JSON renewal history for modal
+// (mounted at /pppoe, so full path = /pppoe/:id/renewals)
 // ============================================================
-pppoe.get('/api/pppoe/:id/renewals', async (c) => {
+pppoe.get('/:id/renewals', async (c) => {
   const user = c.get('user');
   const id = parseInt(c.req.param('id'));
   if (isNaN(id)) return c.json({ error: 'Invalid id' }, 400);
