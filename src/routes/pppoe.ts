@@ -261,7 +261,7 @@ pppoe.get('/', async (c) => {
   const rows = (customers.results || []).map((c: any) => `
     <tr>
       <td>
-        <div style="font-weight:600">${c.full_name}</div>
+        <a href="/pppoe/${c.id}" style="font-weight:600;color:var(--primary);text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${c.full_name}</a>
         <div style="font-size:.75rem;color:var(--text-muted)">${c.pppoe_username}</div>
       </td>
       <td>
@@ -493,6 +493,222 @@ pppoe.post('/', async (c) => {
 });
 
 // ============================================================
+// GET /pppoe/:id — Customer Detail & Renewal History
+// ============================================================
+pppoe.get('/:id', async (c) => {
+  const user = c.get('user');
+  const lang = c.get('lang');
+  const id = parseInt(c.req.param('id'));
+  if (isNaN(id)) return c.redirect('/pppoe');
+
+  const [customer, renewals] = await Promise.all([
+    c.env.DB.prepare(`
+      SELECT pc.*, b.name as branch_name
+      FROM pppoe_customers pc
+      LEFT JOIN branches b ON b.id = pc.branch_id
+      WHERE pc.id=? AND pc.company_id=?`)
+      .bind(id, user.company_id).first<any>(),
+
+    c.env.DB.prepare(`
+      SELECT pr.*, u.name as renewed_by_name
+      FROM pppoe_renewals pr
+      LEFT JOIN users u ON u.id = pr.renewed_by
+      WHERE pr.customer_id=?
+      ORDER BY pr.renewed_at DESC
+      LIMIT 50`)
+      .bind(id).all<any>(),
+  ]);
+
+  if (!customer) return c.redirect('/pppoe');
+
+  const expired = new Date(customer.expiry_date) < new Date();
+  const diff = Math.ceil((new Date(customer.expiry_date).getTime() - Date.now()) / 86400000);
+
+  // ── Renewal History Table ────────────────────────────────
+  const renewalRows = (renewals.results || []).map((r: any, i: number) => `
+    <tr>
+      <td style="color:var(--text-muted);font-size:.78rem">${i + 1}</td>
+      <td><span style="font-size:.82rem">${r.renewed_at ? r.renewed_at.split('T')[0] : '—'}</span></td>
+      <td><del style="color:var(--text-muted);font-size:.8rem">${r.previous_expiry}</del></td>
+      <td><strong style="color:var(--success)">${r.new_expiry}</strong></td>
+      <td style="color:var(--primary);font-weight:600">${formatMoney(r.monthly_price)}</td>
+      <td style="font-size:.78rem;color:var(--text-muted)">${r.renewed_by_name ?? '—'}</td>
+      <td style="font-size:.78rem;color:var(--text-muted)">${r.notes ?? ''}</td>
+    </tr>`).join('');
+
+  const noRenewals = !renewals.results?.length;
+
+  return c.html(pageShell({
+    title: `${customer.full_name} — PPPoE`, lang, user, activePage: 'pppoe',
+    body: `
+    <!-- ── Breadcrumb ── -->
+    <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:1rem">
+      <a href="/pppoe" style="color:var(--primary);text-decoration:none">🌐 مشتریان PPPoE</a>
+      <span style="margin:0 .4rem">›</span>
+      <span>${customer.full_name}</span>
+    </div>
+
+    <!-- ── Header ── -->
+    <div class="page-header">
+      <div>
+        <div class="page-title">${customer.full_name}</div>
+        <div class="page-subtitle" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+          <code style="background:var(--bg-secondary);padding:.1rem .45rem;border-radius:5px;font-size:.78rem">${customer.pppoe_username}</code>
+          ${statusBadge(customer.status, customer.expiry_date)}
+          ${customer.branch_name ? `<span class="badge badge-info" style="font-size:.7rem">🏢 ${customer.branch_name}</span>` : ''}
+        </div>
+      </div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <a href="/pppoe/${customer.id}/edit" class="btn btn-outline">✏️ ویرایش</a>
+        <button onclick="openRenewDetail(${customer.id},'${customer.full_name.replace(/'/g,"\\'").replace(/"/g,'&quot;')}','${customer.expiry_date}')" class="btn btn-primary">🔄 تمدید</button>
+      </div>
+    </div>
+
+    <!-- ── Info Cards ── -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1rem;margin-bottom:1.5rem">
+
+      <!-- Contact -->
+      <div class="card" style="padding:1rem">
+        <div style="font-size:.72rem;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:.6rem">📞 تماس</div>
+        <div style="font-weight:600;font-size:.95rem">${customer.phone_primary}</div>
+        ${customer.phone_secondary ? `<div style="font-size:.82rem;color:var(--text-muted);margin-top:.2rem">${customer.phone_secondary}</div>` : ''}
+        ${customer.address ? `<div style="font-size:.8rem;margin-top:.4rem;color:var(--text-secondary)">📍 ${customer.address}</div>` : ''}
+      </div>
+
+      <!-- Package -->
+      <div class="card" style="padding:1rem">
+        <div style="font-size:.72rem;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:.6rem">📦 بسته</div>
+        <div style="font-size:.95rem;font-weight:600">
+          ${customer.package_type === 'unlimited'
+            ? '♾️ نامحدود'
+            : `📊 ${customer.quota_gb ?? '?'} GB`}
+        </div>
+        <div style="font-size:.82rem;color:var(--text-muted);margin-top:.2rem">⚡ ${customer.speed_mbps} Mbps</div>
+      </div>
+
+      <!-- Pricing -->
+      <div class="card" style="padding:1rem">
+        <div style="font-size:.72rem;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:.6rem">💰 قیمت ماهانه</div>
+        <div style="font-size:1.15rem;font-weight:700;color:var(--success)">${formatMoney(customer.monthly_price)}</div>
+        <div style="font-size:.78rem;color:var(--text-muted);margin-top:.2rem">افغانی / ماه</div>
+      </div>
+
+      <!-- Expiry -->
+      <div class="card" style="padding:1rem">
+        <div style="font-size:.72rem;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:.6rem">📅 انقضا</div>
+        <div style="font-size:.95rem;font-weight:600;color:${expired ? 'var(--danger)' : diff <= 7 ? 'var(--warning)' : 'var(--text)'}"> ${customer.expiry_date}</div>
+        <div style="margin-top:.3rem">${daysLeft(customer.expiry_date)}</div>
+        ${customer.last_renewed_at ? `<div style="font-size:.72rem;color:var(--text-muted);margin-top:.25rem">آخرین تمدید: ${customer.last_renewed_at.split('T')[0]}</div>` : ''}
+      </div>
+
+    </div>
+
+    ${customer.notes ? `
+    <div class="card" style="padding:1rem;margin-bottom:1.5rem;border-right:3px solid var(--primary)">
+      <div style="font-size:.75rem;font-weight:600;color:var(--text-muted);margin-bottom:.3rem">📝 یادداشت</div>
+      <div style="font-size:.9rem">${customer.notes}</div>
+    </div>` : ''}
+
+    <!-- ── Renewal History ── -->
+    <div class="card">
+      <div style="padding:1rem 1.25rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:600;font-size:.95rem">🔄 تاریخچه تمدیدها</div>
+        <span class="badge badge-info" style="font-size:.72rem">${renewals.results?.length ?? 0} بار</span>
+      </div>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th style="width:36px">#</th>
+            <th>تاریخ تمدید</th>
+            <th>انقضای قبلی</th>
+            <th>انقضای جدید</th>
+            <th>قیمت</th>
+            <th>توسط</th>
+            <th>یادداشت</th>
+          </tr></thead>
+          <tbody>
+            ${noRenewals
+              ? `<tr><td colspan="7"><div class="empty-state" style="padding:2rem">
+                  <div class="empty-state-icon">🔄</div>
+                  <h3>هنوز تمدیدی ثبت نشده</h3>
+                  <p style="font-size:.85rem;color:var(--text-muted)">اولین تمدید از دکمه بالا انجام دهید</p>
+                </div></td></tr>`
+              : renewalRows}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Renew Modal (inline on detail page) -->
+    <div class="modal-overlay" id="renew-modal-detail">
+      <div class="modal" style="max-width:420px">
+        <div class="modal-header">
+          <div class="modal-title">🔄 تمدید بسته</div>
+          <button class="modal-close" onclick="closeRenewDetail()">✕</button>
+        </div>
+        <div style="padding:1.25rem">
+          <div style="margin-bottom:1rem">
+            <strong id="renew-d-name"></strong>
+            <div style="font-size:.82rem;color:var(--text-muted);margin-top:.25rem">
+              انقضای فعلی: <span id="renew-d-current"></span>
+            </div>
+          </div>
+          <form method="POST" id="renew-d-form">
+            <div class="form-group">
+              <label>تاریخ پایان جدید <span style="color:var(--danger)">*</span></label>
+              <input type="date" name="new_expiry" id="renew-d-new-expiry" required/>
+              <div class="form-hint">
+                <button type="button" class="btn btn-ghost btn-sm" onclick="setDetailPreset(1)">+۱ ماه</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="setDetailPreset(2)">+۲ ماه</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="setDetailPreset(3)">+۳ ماه</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>یادداشت تمدید</label>
+              <input type="text" name="renew_notes" placeholder="مثلاً: پرداخت نقدی" />
+            </div>
+            <div class="modal-footer" style="border:none;padding:0">
+              <button type="button" onclick="closeRenewDetail()" class="btn btn-outline">انصراف</button>
+              <button type="submit" class="btn btn-primary">💾 ثبت تمدید</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>`,
+
+    scripts: `<script>
+    let _detailCurrentExpiry = '${customer.expiry_date}';
+    function openRenewDetail(id, name, currentExpiry) {
+      _detailCurrentExpiry = currentExpiry;
+      document.getElementById('renew-d-name').textContent = name;
+      document.getElementById('renew-d-current').textContent = currentExpiry;
+      document.getElementById('renew-d-form').action = '/pppoe/' + id + '/renew';
+      setDetailPreset(1);
+      document.getElementById('renew-modal-detail').classList.add('open');
+    }
+    function closeRenewDetail() {
+      document.getElementById('renew-modal-detail').classList.remove('open');
+    }
+    function setDetailPreset(months) {
+      const base = _detailCurrentExpiry || new Date().toISOString().split('T')[0];
+      const d = new Date(base);
+      d.setMonth(d.getMonth() + months);
+      document.getElementById('renew-d-new-expiry').value = d.toISOString().split('T')[0];
+    }
+    // Auto-open renew modal if redirected back with ?renewed=1
+    if (new URLSearchParams(location.search).get('renewed') === '1') {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'position:fixed;top:1rem;left:50%;transform:translateX(-50%);background:var(--success);color:#fff;padding:.65rem 1.4rem;border-radius:10px;font-size:.9rem;z-index:9999;box-shadow:0 4px 15px rgba(0,0,0,.2)';
+      banner.textContent = '✅ تمدید با موفقیت ثبت شد';
+      document.body.appendChild(banner);
+      setTimeout(() => banner.remove(), 3500);
+      history.replaceState(null, '', location.pathname);
+    }
+    </script>`
+  }));
+});
+
+// ============================================================
 // GET /pppoe/:id/edit — Edit Form
 // ============================================================
 pppoe.get('/:id/edit', async (c) => {
@@ -573,29 +789,43 @@ pppoe.post('/:id/edit', async (c) => {
 });
 
 // ============================================================
-// POST /pppoe/:id/renew — Renew (advance expiry_date)
-// Phase 1: no ledger entry. Phase 2 will add financial record.
+// POST /pppoe/:id/renew — Renew (advance expiry_date + log renewal)
+// Phase 2: logs renewal into pppoe_renewals table.
 // ============================================================
 pppoe.post('/:id/renew', async (c) => {
   const user = c.get('user');
   const id = parseInt(c.req.param('id'));
 
-  const existing = await c.env.DB.prepare(
-    'SELECT id FROM pppoe_customers WHERE id=? AND company_id=?'
-  ).bind(id, user.company_id).first<{id:number}>();
-  if (!existing) return c.redirect('/pppoe');
-
   const form = await c.req.formData();
   const new_expiry = form.get('new_expiry')?.toString() ?? '';
   if (!new_expiry) return c.redirect('/pppoe');
 
-  await c.env.DB.prepare(`
-    UPDATE pppoe_customers
-    SET expiry_date=?, last_renewed_at=datetime('now'), status='active'
-    WHERE id=? AND company_id=?`)
-    .bind(new_expiry, id, user.company_id).run();
+  // Fetch old expiry + price (also acts as ownership check)
+  const oldCustomer = await c.env.DB.prepare(
+    'SELECT expiry_date, monthly_price FROM pppoe_customers WHERE id=? AND company_id=?'
+  ).bind(id, user.company_id).first<{expiry_date:string; monthly_price:number}>();
+  if (!oldCustomer) return c.redirect('/pppoe');
 
-  return c.redirect('/pppoe');
+  const renew_notes = form.get('renew_notes')?.toString().trim() || null;
+
+  // Run both writes in batch for atomicity
+  await c.env.DB.batch([
+    c.env.DB.prepare(`
+      UPDATE pppoe_customers
+      SET expiry_date=?, last_renewed_at=datetime('now'), status='active'
+      WHERE id=? AND company_id=?`)
+      .bind(new_expiry, id, user.company_id),
+
+    c.env.DB.prepare(`
+      INSERT INTO pppoe_renewals
+        (customer_id, company_id, previous_expiry, new_expiry, monthly_price, notes, renewed_by)
+      VALUES (?,?,?,?,?,?,?)`)
+      .bind(id, user.company_id, oldCustomer.expiry_date, new_expiry,
+            oldCustomer.monthly_price, renew_notes, user.id),
+  ]);
+
+  // Redirect back to detail page with success flag
+  return c.redirect(`/pppoe/${id}?renewed=1`);
 });
 
 // ============================================================
