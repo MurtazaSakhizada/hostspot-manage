@@ -288,6 +288,8 @@ pppoe.get('/', async (c) => {
           <a href="/pppoe/${c.id}/edit" class="btn btn-outline btn-sm">✏️ ویرایش</a>
           <button onclick="openRenew(${c.id},'${c.full_name.replace(/'/g,"\\'")}','${c.expiry_date}')"
             class="btn btn-sm" style="background:var(--primary);color:#fff">🔄 تمدید</button>
+          <button onclick="openHistory(${c.id},'${c.full_name.replace(/'/g,"\\'")}')"
+            class="btn btn-sm" style="background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)">🕐 تاریخچه</button>
           <button onclick="confirmDelete('/api/pppoe/${c.id}','حذف ${c.full_name.replace(/'/g,"\\'")}؟')"
             class="btn btn-danger btn-sm">🗑️</button>
         </div>
@@ -402,6 +404,19 @@ pppoe.get('/', async (c) => {
           </form>
         </div>
       </div>
+    </div>
+
+    <!-- History Modal -->
+    <div class="modal-overlay" id="history-modal">
+      <div class="modal" style="max-width:680px;width:95%">
+        <div class="modal-header">
+          <div class="modal-title">🕐 تاریخچه تمدیدها &mdash; <span id="history-cname" style="font-weight:400;font-size:.9em"></span></div>
+          <button class="modal-close" onclick="closeHistory()">✕</button>
+        </div>
+        <div id="history-body" style="padding:1.25rem;min-height:120px">
+          <div style="text-align:center;color:var(--text-muted);padding:2rem">در حال بارگذاری...</div>
+        </div>
+      </div>
     </div>`,
 
     scripts: `<script>
@@ -423,6 +438,59 @@ pppoe.get('/', async (c) => {
       const d = new Date(base);
       d.setMonth(d.getMonth() + months);
       document.getElementById('renew-new-expiry').value = d.toISOString().split('T')[0];
+    }
+
+    // ── History Modal ──────────────────────────────────────
+    function openHistory(id, name) {
+      document.getElementById('history-cname').textContent = name;
+      document.getElementById('history-body').innerHTML =
+        '<div style="text-align:center;color:var(--text-muted);padding:2rem">در حال بارگذاری...</div>';
+      document.getElementById('history-modal').classList.add('open');
+
+      fetch('/api/pppoe/' + id + '/renewals')
+        .then(r => r.json())
+        .then(data => {
+          const rows = data.renewals;
+          if (!rows || rows.length === 0) {
+            document.getElementById('history-body').innerHTML =
+              '<div style="text-align:center;padding:2.5rem">' +
+              '<div style="font-size:2rem;margin-bottom:.5rem">🔄</div>' +
+              '<div style="color:var(--text-muted)">هنوز تمدیدی ثبت نشده</div>' +
+              '</div>';
+            return;
+          }
+          let html = '<div class="table-wrapper" style="max-height:400px;overflow-y:auto">' +
+            '<table>' +
+            '<thead><tr>' +
+            '<th style="width:32px">#</th>' +
+            '<th>تاریخ تمدید</th>' +
+            '<th>انقضای قبلی</th>' +
+            '<th>انقضای جدید</th>' +
+            '<th>قیمت</th>' +
+            '<th>یادداشت</th>' +
+            '</tr></thead><tbody>';
+          rows.forEach((r, i) => {
+            const renewDate = r.renewed_at ? r.renewed_at.split('T')[0] : '—';
+            const price = Number(r.monthly_price).toLocaleString('fa-IR');
+            html += '<tr>' +
+              '<td style="color:var(--text-muted);font-size:.78rem">' + (i+1) + '</td>' +
+              '<td style="font-size:.82rem">' + renewDate + '</td>' +
+              '<td><del style="color:var(--text-muted);font-size:.8rem">' + (r.previous_expiry||'—') + '</del></td>' +
+              '<td><strong style="color:var(--success)">' + (r.new_expiry||'—') + '</strong></td>' +
+              '<td style="color:var(--primary);font-weight:600;font-size:.85rem">' + price + ' افغانی</td>' +
+              '<td style="font-size:.78rem;color:var(--text-muted)">' + (r.notes||'') + '</td>' +
+              '</tr>';
+          });
+          html += '</tbody></table></div>';
+          document.getElementById('history-body').innerHTML = html;
+        })
+        .catch(() => {
+          document.getElementById('history-body').innerHTML =
+            '<div style="text-align:center;color:var(--danger);padding:2rem">خطا در بارگذاری تاریخچه</div>';
+        });
+    }
+    function closeHistory() {
+      document.getElementById('history-modal').classList.remove('open');
     }
     </script>`
   }));
@@ -826,6 +894,30 @@ pppoe.post('/:id/renew', async (c) => {
 
   // Redirect back to detail page with success flag
   return c.redirect(`/pppoe/${id}?renewed=1`);
+});
+
+// ============================================================
+// GET /api/pppoe/:id/renewals — JSON renewal history for modal
+// ============================================================
+pppoe.get('/api/pppoe/:id/renewals', async (c) => {
+  const user = c.get('user');
+  const id = parseInt(c.req.param('id'));
+  if (isNaN(id)) return c.json({ error: 'Invalid id' }, 400);
+
+  const exists = await c.env.DB.prepare(
+    'SELECT id FROM pppoe_customers WHERE id=? AND company_id=?'
+  ).bind(id, user.company_id).first<{id:number}>();
+  if (!exists) return c.json({ error: 'Not found' }, 404);
+
+  const result = await c.env.DB.prepare(`
+    SELECT renewed_at, previous_expiry, new_expiry, monthly_price, notes
+    FROM pppoe_renewals
+    WHERE customer_id=?
+    ORDER BY renewed_at DESC
+    LIMIT 100`)
+    .bind(id).all<any>();
+
+  return c.json({ renewals: result.results ?? [] });
 });
 
 // ============================================================
