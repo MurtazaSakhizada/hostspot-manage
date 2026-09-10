@@ -1075,27 +1075,8 @@ pppoe.get('/:id/renewals', async (c) => {
   return c.json({ renewals: result.results ?? [] });
 });
 
-// ============================================================
-// DELETE /api/pppoe/:id — Delete Customer
-// ============================================================
-pppoe.delete('/api/pppoe/:id', async (c) => {
-  const user = c.get('user');
-  const id = parseInt(c.req.param('id'));
-  if (isNaN(id)) return c.json({ error: 'Invalid id' }, 400);
-
-  try {
-    const existing = await c.env.DB.prepare(
-      'SELECT id FROM pppoe_customers WHERE id=? AND company_id=?'
-    ).bind(id, user.company_id).first<{id:number}>();
-    if (!existing) return c.json({ error: 'Not found' }, 404);
-
-    await c.env.DB.prepare('DELETE FROM pppoe_customers WHERE id=? AND company_id=?')
-      .bind(id, user.company_id).run();
-
-    return c.json({ success: true });
-  } catch (e: any) {
-    return c.json({ error: e?.message ?? 'Delete failed' }, 500);
-  }
-});
+// NOTE: DELETE /api/pppoe/:id is handled in index.ts (app root)
+// because pppoe.ts is mounted at /pppoe, so a delete defined here
+// would resolve to /pppoe/api/pppoe/:id — never matching /api/pppoe/:id.
 
 export default pppoe;
