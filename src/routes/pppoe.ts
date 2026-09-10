@@ -286,7 +286,7 @@ pppoe.get('/', async (c) => {
       <td>
         <div style="display:flex;flex-wrap:wrap;gap:.3rem">
           <a href="/pppoe/${c.id}/edit" class="btn btn-outline btn-sm">✏️ ویرایش</a>
-          <button onclick="openRenew(${c.id},'${c.full_name.replace(/'/g,"\\'")}','${c.expiry_date}')"
+          <button onclick="openRenew(${c.id},'${c.full_name.replace(/'/g,"\\'")}','${c.expiry_date}','${c.package_type}',${c.speed_mbps},${c.quota_gb ?? 'null'},${c.monthly_price})"
             class="btn btn-sm" style="background:var(--primary);color:#fff">🔄 تمدید</button>
           <button onclick="openHistory(${c.id},'${c.full_name.replace(/'/g,"\\'")}')"
             class="btn btn-sm" style="background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)">🕐 تاریخچه</button>
@@ -374,7 +374,7 @@ pppoe.get('/', async (c) => {
 
     <!-- Renew Modal -->
     <div class="modal-overlay" id="renew-modal">
-      <div class="modal" style="max-width:420px">
+      <div class="modal" style="max-width:480px">
         <div class="modal-header">
           <div class="modal-title">🔄 تمدید بسته</div>
           <button class="modal-close" onclick="closeRenew()">✕</button>
@@ -388,15 +388,56 @@ pppoe.get('/', async (c) => {
           </div>
           <form method="POST" id="renew-form">
             <input type="hidden" name="_method" value="RENEW"/>
+
+            <!-- Package type -->
             <div class="form-group">
-              <label>تاریخ پایان جدید <span style="color:var(--danger)">*</span></label>
-              <input type="date" name="new_expiry" id="renew-new-expiry" required/>
-              <div class="form-hint">
-                <button type="button" class="btn btn-ghost btn-sm" onclick="setRenewPreset(1)">+۱ ماه</button>
-                <button type="button" class="btn btn-ghost btn-sm" onclick="setRenewPreset(2)">+۲ ماه</button>
-                <button type="button" class="btn btn-ghost btn-sm" onclick="setRenewPreset(3)">+۳ ماه</button>
+              <label>نوع بسته <span style="color:var(--danger)">*</span></label>
+              <div style="display:flex;gap:.6rem;margin-top:.25rem">
+                <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;padding:.45rem .9rem;border:2px solid var(--border);border-radius:8px;flex:1;transition:border-color .15s" id="rl-unlimited">
+                  <input type="radio" name="package_type" value="unlimited" id="r-pkg-unlimited" onchange="toggleRenewPkg()" style="accent-color:var(--primary)"/>
+                  <span style="font-weight:500;font-size:.9rem">♾️ نامحدود</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;padding:.45rem .9rem;border:2px solid var(--border);border-radius:8px;flex:1;transition:border-color .15s" id="rl-limited">
+                  <input type="radio" name="package_type" value="limited" id="r-pkg-limited" onchange="toggleRenewPkg()" style="accent-color:var(--primary)"/>
+                  <span style="font-weight:500;font-size:.9rem">📊 محدود (حجمی)</span>
+                </label>
               </div>
             </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>سرعت <span style="color:var(--danger)">*</span></label>
+                <select name="speed_mbps" id="r-speed">
+                  ${SPEEDS.map(s => `<option value="${s}">${s} Mbps</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group" id="r-quota-group">
+                <label>حجم (GB) <span style="color:var(--danger)">*</span></label>
+                <input type="number" name="quota_gb" id="r-quota" min="1" step="1" placeholder="مثلاً: 50"/>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>قیمت این دوره (افغانی) <span style="color:var(--danger)">*</span></label>
+                <input type="number" name="monthly_price" id="r-price" required min="0" step="1"/>
+              </div>
+              <div class="form-group">
+                <label>تاریخ پایان جدید <span style="color:var(--danger)">*</span></label>
+                <input type="date" name="new_expiry" id="renew-new-expiry" required/>
+              </div>
+            </div>
+            <div class="form-hint" style="margin-top:-.5rem;margin-bottom:.75rem">
+              <button type="button" class="btn btn-ghost btn-sm" onclick="setRenewPreset(1)">+۱ ماه</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="setRenewPreset(2)">+۲ ماه</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="setRenewPreset(3)">+۳ ماه</button>
+            </div>
+
+            <div class="form-group">
+              <label>یادداشت</label>
+              <input type="text" name="renew_notes" placeholder="مثلاً: پرداخت نقدی"/>
+            </div>
+
             <div class="modal-footer" style="border:none;padding:0">
               <button type="button" onclick="closeRenew()" class="btn btn-outline">انصراف</button>
               <button type="submit" class="btn btn-primary">💾 ثبت تمدید</button>
@@ -421,11 +462,30 @@ pppoe.get('/', async (c) => {
 
     scripts: `<script>
     let _renewCurrentExpiry = '';
-    function openRenew(id, name, currentExpiry) {
+    function openRenew(id, name, currentExpiry, pkgType, speed, quota, price) {
       _renewCurrentExpiry = currentExpiry;
       document.getElementById('renew-name').textContent = name;
       document.getElementById('renew-current-expiry').textContent = currentExpiry;
       document.getElementById('renew-form').action = '/pppoe/' + id + '/renew';
+
+      // Pre-fill package type
+      if (pkgType === 'limited') {
+        document.getElementById('r-pkg-limited').checked = true;
+      } else {
+        document.getElementById('r-pkg-unlimited').checked = true;
+      }
+      toggleRenewPkg();
+
+      // Pre-fill speed
+      document.getElementById('r-speed').value = speed || 4;
+
+      // Pre-fill quota
+      if (quota && quota !== 'null') document.getElementById('r-quota').value = quota;
+      else document.getElementById('r-quota').value = '';
+
+      // Pre-fill price
+      document.getElementById('r-price').value = price || '';
+
       // Default: +1 month from current expiry
       setRenewPreset(1);
       document.getElementById('renew-modal').classList.add('open');
@@ -439,6 +499,15 @@ pppoe.get('/', async (c) => {
       d.setMonth(d.getMonth() + months);
       document.getElementById('renew-new-expiry').value = d.toISOString().split('T')[0];
     }
+    function toggleRenewPkg() {
+      const isLimited = document.getElementById('r-pkg-limited').checked;
+      document.getElementById('r-quota-group').style.display = isLimited ? '' : 'none';
+      document.getElementById('r-quota').required = isLimited;
+      document.getElementById('rl-unlimited').style.borderColor = !isLimited ? 'var(--primary)' : 'var(--border)';
+      document.getElementById('rl-limited').style.borderColor   =  isLimited ? 'var(--primary)' : 'var(--border)';
+    }
+    // Init on page load
+    toggleRenewPkg();
 
     // ── History Modal ──────────────────────────────────────
     function openHistory(id, name) {
@@ -464,6 +533,7 @@ pppoe.get('/', async (c) => {
             '<thead><tr>' +
             '<th style="width:32px">#</th>' +
             '<th>تاریخ تمدید</th>' +
+            '<th>بسته</th>' +
             '<th>انقضای قبلی</th>' +
             '<th>انقضای جدید</th>' +
             '<th>قیمت</th>' +
@@ -472,9 +542,13 @@ pppoe.get('/', async (c) => {
           rows.forEach((r, i) => {
             const renewDate = r.renewed_at ? r.renewed_at.split('T')[0] : '—';
             const price = Number(r.monthly_price).toLocaleString('fa-IR');
+            const pkgLabel = r.package_type === 'limited'
+              ? ('📊 ' + (r.quota_gb ? r.quota_gb + ' GB' : '?') + ' / ' + (r.speed_mbps||'?') + ' Mbps')
+              : ('♾️ ' + (r.speed_mbps||'?') + ' Mbps');
             html += '<tr>' +
               '<td style="color:var(--text-muted);font-size:.78rem">' + (i+1) + '</td>' +
               '<td style="font-size:.82rem">' + renewDate + '</td>' +
+              '<td style="font-size:.78rem;white-space:nowrap">' + pkgLabel + '</td>' +
               '<td><del style="color:var(--text-muted);font-size:.8rem">' + (r.previous_expiry||'—') + '</del></td>' +
               '<td><strong style="color:var(--success)">' + (r.new_expiry||'—') + '</strong></td>' +
               '<td style="color:var(--primary);font-weight:600;font-size:.85rem">' + price + ' افغانی</td>' +
@@ -593,16 +667,22 @@ pppoe.get('/:id', async (c) => {
   const diff = Math.ceil((new Date(customer.expiry_date).getTime() - Date.now()) / 86400000);
 
   // ── Renewal History Table ────────────────────────────────
-  const renewalRows = (renewals.results || []).map((r: any, i: number) => `
+  const renewalRows = (renewals.results || []).map((r: any, i: number) => {
+    const pkgLabel = r.package_type === 'limited'
+      ? `📊 ${r.quota_gb ?? '?'} GB / ${r.speed_mbps ?? '?'} Mbps`
+      : `♾️ ${r.speed_mbps ?? '?'} Mbps`;
+    return `
     <tr>
       <td style="color:var(--text-muted);font-size:.78rem">${i + 1}</td>
       <td><span style="font-size:.82rem">${r.renewed_at ? r.renewed_at.split('T')[0] : '—'}</span></td>
+      <td style="font-size:.78rem;white-space:nowrap">${pkgLabel}</td>
       <td><del style="color:var(--text-muted);font-size:.8rem">${r.previous_expiry}</del></td>
       <td><strong style="color:var(--success)">${r.new_expiry}</strong></td>
       <td style="color:var(--primary);font-weight:600">${formatMoney(r.monthly_price)}</td>
       <td style="font-size:.78rem;color:var(--text-muted)">${r.renewed_by_name ?? '—'}</td>
       <td style="font-size:.78rem;color:var(--text-muted)">${r.notes ?? ''}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   const noRenewals = !renewals.results?.length;
 
@@ -688,6 +768,7 @@ pppoe.get('/:id', async (c) => {
           <thead><tr>
             <th style="width:36px">#</th>
             <th>تاریخ تمدید</th>
+            <th>بسته</th>
             <th>انقضای قبلی</th>
             <th>انقضای جدید</th>
             <th>قیمت</th>
@@ -696,7 +777,7 @@ pppoe.get('/:id', async (c) => {
           </tr></thead>
           <tbody>
             ${noRenewals
-              ? `<tr><td colspan="7"><div class="empty-state" style="padding:2rem">
+              ? `<tr><td colspan="8"><div class="empty-state" style="padding:2rem">
                   <div class="empty-state-icon">🔄</div>
                   <h3>هنوز تمدیدی ثبت نشده</h3>
                   <p style="font-size:.85rem;color:var(--text-muted)">اولین تمدید از دکمه بالا انجام دهید</p>
@@ -709,7 +790,7 @@ pppoe.get('/:id', async (c) => {
 
     <!-- Renew Modal (inline on detail page) -->
     <div class="modal-overlay" id="renew-modal-detail">
-      <div class="modal" style="max-width:420px">
+      <div class="modal" style="max-width:480px">
         <div class="modal-header">
           <div class="modal-title">🔄 تمدید بسته</div>
           <button class="modal-close" onclick="closeRenewDetail()">✕</button>
@@ -722,15 +803,53 @@ pppoe.get('/:id', async (c) => {
             </div>
           </div>
           <form method="POST" id="renew-d-form">
+
+            <!-- Package type -->
             <div class="form-group">
-              <label>تاریخ پایان جدید <span style="color:var(--danger)">*</span></label>
-              <input type="date" name="new_expiry" id="renew-d-new-expiry" required/>
-              <div class="form-hint">
-                <button type="button" class="btn btn-ghost btn-sm" onclick="setDetailPreset(1)">+۱ ماه</button>
-                <button type="button" class="btn btn-ghost btn-sm" onclick="setDetailPreset(2)">+۲ ماه</button>
-                <button type="button" class="btn btn-ghost btn-sm" onclick="setDetailPreset(3)">+۳ ماه</button>
+              <label>نوع بسته <span style="color:var(--danger)">*</span></label>
+              <div style="display:flex;gap:.6rem;margin-top:.25rem">
+                <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;padding:.45rem .9rem;border:2px solid var(--border);border-radius:8px;flex:1;transition:border-color .15s" id="dl-unlimited">
+                  <input type="radio" name="package_type" value="unlimited" id="d-pkg-unlimited" onchange="toggleDetailPkg()" style="accent-color:var(--primary)"
+                    ${customer.package_type !== 'limited' ? 'checked' : ''}/>
+                  <span style="font-weight:500;font-size:.9rem">♾️ نامحدود</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;padding:.45rem .9rem;border:2px solid var(--border);border-radius:8px;flex:1;transition:border-color .15s" id="dl-limited">
+                  <input type="radio" name="package_type" value="limited" id="d-pkg-limited" onchange="toggleDetailPkg()" style="accent-color:var(--primary)"
+                    ${customer.package_type === 'limited' ? 'checked' : ''}/>
+                  <span style="font-weight:500;font-size:.9rem">📊 محدود (حجمی)</span>
+                </label>
               </div>
             </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>سرعت <span style="color:var(--danger)">*</span></label>
+                <select name="speed_mbps" id="d-speed">
+                  ${SPEEDS.map(s => `<option value="${s}" ${s === customer.speed_mbps ? 'selected' : ''}>${s} Mbps</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group" id="d-quota-group" style="${customer.package_type !== 'limited' ? 'display:none' : ''}">
+                <label>حجم (GB) <span style="color:var(--danger)">*</span></label>
+                <input type="number" name="quota_gb" id="d-quota" min="1" step="1" value="${customer.quota_gb ?? ''}" placeholder="مثلاً: 50"/>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>قیمت این دوره (افغانی) <span style="color:var(--danger)">*</span></label>
+                <input type="number" name="monthly_price" id="d-price" required min="0" step="1" value="${customer.monthly_price}"/>
+              </div>
+              <div class="form-group">
+                <label>تاریخ پایان جدید <span style="color:var(--danger)">*</span></label>
+                <input type="date" name="new_expiry" id="renew-d-new-expiry" required/>
+              </div>
+            </div>
+            <div class="form-hint" style="margin-top:-.5rem;margin-bottom:.75rem">
+              <button type="button" class="btn btn-ghost btn-sm" onclick="setDetailPreset(1)">+۱ ماه</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="setDetailPreset(2)">+۲ ماه</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="setDetailPreset(3)">+۳ ماه</button>
+            </div>
+
             <div class="form-group">
               <label>یادداشت تمدید</label>
               <input type="text" name="renew_notes" placeholder="مثلاً: پرداخت نقدی" />
@@ -752,6 +871,7 @@ pppoe.get('/:id', async (c) => {
       document.getElementById('renew-d-current').textContent = currentExpiry;
       document.getElementById('renew-d-form').action = '/pppoe/' + id + '/renew';
       setDetailPreset(1);
+      toggleDetailPkg();
       document.getElementById('renew-modal-detail').classList.add('open');
     }
     function closeRenewDetail() {
@@ -763,6 +883,15 @@ pppoe.get('/:id', async (c) => {
       d.setMonth(d.getMonth() + months);
       document.getElementById('renew-d-new-expiry').value = d.toISOString().split('T')[0];
     }
+    function toggleDetailPkg() {
+      const isLimited = document.getElementById('d-pkg-limited').checked;
+      document.getElementById('d-quota-group').style.display = isLimited ? '' : 'none';
+      document.getElementById('d-quota').required = isLimited;
+      document.getElementById('dl-unlimited').style.borderColor = !isLimited ? 'var(--primary)' : 'var(--border)';
+      document.getElementById('dl-limited').style.borderColor   =  isLimited ? 'var(--primary)' : 'var(--border)';
+    }
+    // Init
+    toggleDetailPkg();
     // Auto-show banners for redirect results
     const _params = new URLSearchParams(location.search);
     if (_params.get('renewed') === '1') {
@@ -874,32 +1003,41 @@ pppoe.post('/:id/renew', async (c) => {
   const id = parseInt(c.req.param('id'));
 
   const form = await c.req.formData();
-  const new_expiry = form.get('new_expiry')?.toString() ?? '';
+  const new_expiry    = form.get('new_expiry')?.toString() ?? '';
   if (!new_expiry) return c.redirect('/pppoe');
 
-  // Fetch old expiry + price (also acts as ownership check)
-  const oldCustomer = await c.env.DB.prepare(
-    'SELECT expiry_date, monthly_price FROM pppoe_customers WHERE id=? AND company_id=?'
-  ).bind(id, user.company_id).first<{expiry_date:string; monthly_price:number}>();
-  if (!oldCustomer) return c.redirect('/pppoe');
+  // New package fields submitted from the renew modal
+  const new_pkg_type  = form.get('package_type')?.toString() === 'limited' ? 'limited' : 'unlimited';
+  const new_speed     = Math.min(10, Math.max(1, parseInt(form.get('speed_mbps')?.toString() ?? '4') || 4));
+  const new_quota     = new_pkg_type === 'limited' ? (parseFloat(form.get('quota_gb')?.toString() ?? '0') || null) : null;
+  const new_price     = parseFloat(form.get('monthly_price')?.toString() ?? '0') || 0;
+  const renew_notes   = form.get('renew_notes')?.toString().trim() || null;
 
-  const renew_notes = form.get('renew_notes')?.toString().trim() || null;
+  // Fetch old values for history (also acts as ownership check)
+  const oldCustomer = await c.env.DB.prepare(
+    'SELECT expiry_date, monthly_price, package_type, speed_mbps, quota_gb FROM pppoe_customers WHERE id=? AND company_id=?'
+  ).bind(id, user.company_id).first<{expiry_date:string; monthly_price:number; package_type:string; speed_mbps:number; quota_gb:number|null}>();
+  if (!oldCustomer) return c.redirect('/pppoe');
 
   // Run both writes in batch for atomicity
   try {
     await c.env.DB.batch([
+      // Update customer: expiry + package details + price
       c.env.DB.prepare(`
         UPDATE pppoe_customers
-        SET expiry_date=?, last_renewed_at=datetime('now'), status='active'
+        SET expiry_date=?, package_type=?, speed_mbps=?, quota_gb=?,
+            monthly_price=?, last_renewed_at=datetime('now'), status='active'
         WHERE id=? AND company_id=?`)
-        .bind(new_expiry, id, user.company_id),
+        .bind(new_expiry, new_pkg_type, new_speed, new_quota, new_price, id, user.company_id),
 
+      // Log renewal with full package snapshot
       c.env.DB.prepare(`
         INSERT INTO pppoe_renewals
-          (customer_id, company_id, previous_expiry, new_expiry, monthly_price, notes, renewed_by)
-        VALUES (?,?,?,?,?,?,?)`)
+          (customer_id, company_id, previous_expiry, new_expiry,
+           monthly_price, package_type, speed_mbps, quota_gb, notes, renewed_by)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`)
         .bind(id, user.company_id, oldCustomer.expiry_date, new_expiry,
-              oldCustomer.monthly_price, renew_notes, user.id),
+              new_price, new_pkg_type, new_speed, new_quota, renew_notes, user.id),
     ]);
   } catch (e: any) {
     console.error('PPPoE renew error:', e);
@@ -926,7 +1064,8 @@ pppoe.get('/:id/renewals', async (c) => {
   if (!exists) return c.json({ error: 'Not found' }, 404);
 
   const result = await c.env.DB.prepare(`
-    SELECT renewed_at, previous_expiry, new_expiry, monthly_price, notes
+    SELECT renewed_at, previous_expiry, new_expiry,
+           monthly_price, package_type, speed_mbps, quota_gb, notes
     FROM pppoe_renewals
     WHERE customer_id=?
     ORDER BY renewed_at DESC
