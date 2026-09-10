@@ -16,7 +16,7 @@ const notifications = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 export function notifIcon(category: string): string {
   const map: Record<string, string> = {
     inventory: '📦', allocation: '🔀', sale: '💰',
-    payment: '💳', system: '⚙️', report: '📊'
+    payment: '💳', system: '⚙️', report: '📊', pppoe: '🌐'
   };
   return map[category] ?? '🔔';
 }
@@ -35,7 +35,7 @@ export async function createNotification(
     company_id: number;
     user_id?: number | null;
     type: 'info' | 'warning' | 'success' | 'error';
-    category: 'inventory' | 'allocation' | 'sale' | 'payment' | 'system' | 'report';
+    category: 'inventory' | 'allocation' | 'sale' | 'payment' | 'system' | 'report' | 'pppoe';
     title: string;
     message: string;
     link?: string;
@@ -105,6 +105,7 @@ notifications.get('/', async (c) => {
     {key:'allocation',label: t(lang,'filter_allocations')},
     {key:'payment',   label: t(lang,'filter_payments')},
     {key:'system',    label: t(lang,'filter_system')},
+    {key:'pppoe',     label: '🌐 PPPoE'},
   ];
 
   const tabsHtml = filterTabs.map(tab => `

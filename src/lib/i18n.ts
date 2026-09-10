@@ -99,6 +99,7 @@ type TranslationKeys =
   | 'notif_view' | 'notif_delete'
   | 'notif_dropdown_title' | 'notif_view_all' | 'notif_mark_all'
   | 'failed_to_load' | 'no_notif_dropdown'
+  | 'pppoe_expiry_title'
   // ── Inventory ────────────────────────────────────────────
   | 'stock_in' | 'stock_history' | 'batch' | 'remaining'
   | 'seller_inventory' | 'your_allocated_stock'
@@ -405,6 +406,7 @@ const en: Translations = {
   notif_mark_all: '✓ Mark all read',
   failed_to_load: 'Failed to load',
   no_notif_dropdown: 'No notifications',
+  pppoe_expiry_title: 'PPPoE Package Expiring Soon',
   mark_read: 'Mark as Read',
   mark_all_read: 'Mark All Read',
   no_notifications: 'No notifications',
@@ -744,6 +746,7 @@ const fa: Translations = {
   notif_mark_all: '✓ همه را خوانده علامت بزن',
   failed_to_load: 'بارگذاری ناموفق',
   no_notif_dropdown: 'اعلانی موجود نیست',
+  pppoe_expiry_title: '⚠️ بسته PPPoE در حال انقضا',
   mark_read: 'علامت‌گذاری به‌عنوان خوانده‌شده',
   mark_all_read: 'علامت‌گذاری همه',
   no_notifications: 'اعلانی موجود نیست',
@@ -1084,6 +1087,7 @@ const ps: Translations = {
   notif_mark_all: '✓ ټولې لوستل شوې',
   failed_to_load: 'لوډول بریالی نه شو',
   no_notif_dropdown: 'خبرتیا نشته',
+  pppoe_expiry_title: '⚠️ د PPPoE پاکټ ختمیدل',
   mark_read: 'د لوستل شوي په توګه نښه کول',
   mark_all_read: 'ټول نښه کول',
   no_notifications: 'خبرتیا نشته',
