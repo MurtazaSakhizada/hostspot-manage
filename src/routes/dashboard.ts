@@ -8,78 +8,11 @@ import { parseCookies } from '../lib/auth';
 import { pageShell } from '../lib/layout';
 import { formatGB, formatMoney } from '../lib/calc';
 import { getCompanyLedgerSummary, getAllSellerBalances, getSellerLedger } from '../lib/ledger';
-import { createNotification } from './notifications';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
 
 const dashboard = new Hono<{ Bindings: Bindings; Variables: Variables }>();
-
-// ============================================================
-// PPPoE Expiry Notification Check
-// Called on every owner dashboard load. Inserts a 'warning'
-// notification for each active PPPoE customer whose expiry is
-// within 3 days — but only once per (customer_id, expiry_date)
-// pair to prevent spam (24-hour dedup guard via link field).
-// ============================================================
-async function checkPPPoEExpiryNotifications(
-  db: D1Database,
-  companyId: number,
-  ownerId: number
-): Promise<void> {
-  try {
-    // Find all active customers expiring within 3 days
-    const expiring = await db.prepare(`
-      SELECT id, full_name, expiry_date,
-        CAST(julianday(expiry_date) - julianday('now') AS INTEGER) as days_left
-      FROM pppoe_customers
-      WHERE company_id=?
-        AND status='active'
-        AND date(expiry_date) BETWEEN date('now') AND date('now','+3 days')
-      ORDER BY expiry_date ASC`)
-      .bind(companyId).all<{id:number; full_name:string; expiry_date:string; days_left:number}>();
-
-    if (!expiring.results?.length) return;
-
-    for (const cust of expiring.results) {
-      const link = `/pppoe/${cust.id}`;
-      const deduKey = `pppoe:expiry:${cust.id}:${cust.expiry_date}`;
-
-      // Dedup: check if we already sent a notification for this
-      // customer + expiry_date combo in the last 24 hours
-      const already = await db.prepare(`
-        SELECT id FROM notifications
-        WHERE company_id=?
-          AND category='pppoe'
-          AND link=?
-          AND title LIKE '%PPPoE%'
-          AND created_at >= datetime('now','-24 hours')
-        LIMIT 1`)
-        .bind(companyId, link).first<{id:number}>();
-
-      if (already) continue;   // already notified in this 24h window
-
-      const days = Math.max(0, cust.days_left ?? 0);
-      const title = '⚠️ بسته PPPoE در حال انقضا';
-      const message = days === 0
-        ? `بسته‌ی ${cust.full_name} امروز منقضی می‌شود!`
-        : `بسته‌ی ${cust.full_name} تا ${days} روز دیگر تمام می‌شود`;
-
-      await createNotification(db, {
-        company_id: companyId,
-        user_id:    ownerId,        // targeted only to the owner
-        type:       'warning',
-        category:   'pppoe',
-        title,
-        message,
-        link,
-      });
-    }
-  } catch (e) {
-    // Never crash the dashboard — silently log
-    console.error('checkPPPoEExpiryNotifications error:', e);
-  }
-}
 
 // ============================================================
 // OWNER DASHBOARD
@@ -294,17 +227,6 @@ async function ownerDashboard(
 
 
 
-  // ── PPPoE summary for owner dashboard widget ──────────────
-  const pppoeSum = await db.prepare(`
-    SELECT
-      COUNT(*) as total,
-      SUM(CASE WHEN status='active' AND date(expiry_date) >= date('now') THEN 1 ELSE 0 END) as active_count,
-      SUM(CASE WHEN status='active'
-                AND date(expiry_date) BETWEEN date('now') AND date('now','+3 days') THEN 1 ELSE 0 END) as expiring_soon,
-      COALESCE(SUM(CASE WHEN status='active' THEN monthly_price ELSE 0 END),0) as monthly_revenue
-    FROM pppoe_customers WHERE company_id=?`)
-    .bind(user.company_id).first<any>();
-
   // ── HTML building ─────────────────────────────────────────
   const sellerRows = (sellers.results||[]).map((s: any) => {
     // debt = alloc_value - commission_earned - paid_to_seller
@@ -444,38 +366,6 @@ async function ownerDashboard(
       </table>
     </div>` : `<div class="empty-state"><div class="empty-state-icon">👥</div><h3>${t(lang,'no_data')}</h3></div>`}
   </div>
-
-  <!-- PPPoE Summary Widget (owner only) -->
-  ${(pppoeSum?.total ?? 0) > 0 ? `
-  <div class="card" style="margin-bottom:1rem;border-right:3px solid var(--primary)">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:.75rem 1.25rem;border-bottom:1px solid var(--border)">
-      <div style="font-weight:600;font-size:.9rem">🌐 مشتریان PPPoE</div>
-      <a href="/pppoe" class="btn btn-outline btn-sm" style="font-size:.75rem">مشاهده همه →</a>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:0;padding:.5rem .75rem">
-      <div style="padding:.6rem .5rem;text-align:center;border-left:1px solid var(--border)">
-        <div style="font-size:1.3rem;font-weight:700;color:var(--primary)">${pppoeSum?.total ?? 0}</div>
-        <div style="font-size:.72rem;color:var(--text-muted)">کل مشتریان</div>
-      </div>
-      <div style="padding:.6rem .5rem;text-align:center;border-left:1px solid var(--border)">
-        <div style="font-size:1.3rem;font-weight:700;color:var(--success)">${pppoeSum?.active_count ?? 0}</div>
-        <div style="font-size:.72rem;color:var(--text-muted)">فعال</div>
-      </div>
-      <div style="padding:.6rem .5rem;text-align:center;border-left:1px solid var(--border)">
-        <div style="font-size:1.3rem;font-weight:700;color:var(--warning)">${pppoeSum?.expiring_soon ?? 0}</div>
-        <div style="font-size:.72rem;color:var(--text-muted)">به‌زودی منقضی (۳ روز)</div>
-      </div>
-      <div style="padding:.6rem .5rem;text-align:center">
-        <div style="font-size:1.1rem;font-weight:700;color:var(--success)">${formatMoney(pppoeSum?.monthly_revenue ?? 0)}</div>
-        <div style="font-size:.72rem;color:var(--text-muted)">درآمد ماهانه</div>
-      </div>
-    </div>
-    ${(pppoeSum?.expiring_soon ?? 0) > 0 ? `
-    <div style="padding:.45rem 1.25rem;background:linear-gradient(90deg,rgba(245,158,11,.08),transparent);border-top:1px solid var(--border);font-size:.78rem;color:#b45309">
-      ⚠️ <strong>${pppoeSum.expiring_soon}</strong> مشتری در ۳ روز آینده منقضی می‌شود —
-      <a href="/pppoe?status=expiring" style="color:var(--primary)">مشاهده →</a>
-    </div>` : ''}
-  </div>` : ''}
 
   <!-- Formula Banner — at the bottom of the page -->
   <div class="formula-strip" style="margin-top:.5rem">
@@ -1741,13 +1631,6 @@ dashboard.get('/', async (c) => {
 
   let bodyHtml: string;
   if (user.role === 'owner') {
-    // Fire-and-forget PPPoE expiry check — never blocks page render
-    const expiryCheckPromise = checkPPPoEExpiryNotifications(c.env.DB, user.company_id, user.id);
-    if (c.executionCtx?.waitUntil) {
-      c.executionCtx.waitUntil(expiryCheckPromise);
-    }
-    // (If executionCtx unavailable in local dev, check still runs async)
-
     // Check company settings for dashboard_mode
     const company = await c.env.DB.prepare('SELECT settings FROM companies WHERE id=?')
       .bind(user.company_id).first<{settings:string}>();

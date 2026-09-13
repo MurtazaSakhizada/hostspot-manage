@@ -22,7 +22,6 @@ import notificationsRoutes from './routes/notifications';
 import expensesRoutes from './routes/expenses';
 import ledgerRoutes from './routes/ledger';
 import mobileRoutes from './routes/mobile';
-import pppoeRoutes from './routes/pppoe';
 
 type Bindings = { DB: D1Database };
 type Variables = { user: SessionUser; lang: Lang };
@@ -112,7 +111,6 @@ app.route('/notifications', notificationsRoutes);
 app.route('/expenses', expensesRoutes);
 app.route('/ledger', ledgerRoutes);
 app.route('/mobile', mobileRoutes);
-app.route('/pppoe', pppoeRoutes);
 app.route('/', adminRoutes);
 
 // ---- API: Delete endpoints (re-mount under app root) ----
@@ -244,24 +242,6 @@ app.delete('/api/users/:id', async (c) => {
   } catch(e: any) {
     console.error('DELETE /api/users/:id error:', e);
     return c.json({error: e?.message ?? 'Delete failed'}, 500);
-  }
-});
-
-app.delete('/api/pppoe/:id', async (c) => {
-  const user = c.get('user');
-  if (!user || user.role !== 'owner') return c.json({ error: 'Forbidden' }, 403);
-  const id = parseInt(c.req.param('id'));
-  if (isNaN(id)) return c.json({ error: 'Invalid id' }, 400);
-  try {
-    const existing = await c.env.DB.prepare(
-      'SELECT id FROM pppoe_customers WHERE id=? AND company_id=?'
-    ).bind(id, user.company_id).first<{id:number}>();
-    if (!existing) return c.json({ error: 'Not found' }, 404);
-    await c.env.DB.prepare('DELETE FROM pppoe_customers WHERE id=? AND company_id=?')
-      .bind(id, user.company_id).run();
-    return c.json({ success: true });
-  } catch (e: any) {
-    return c.json({ error: e?.message ?? 'Delete failed' }, 500);
   }
 });
 
